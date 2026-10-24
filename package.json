@@ -1,0 +1,19 @@
+{
+  "name": "lpl-tv",
+  "version": "1.1.0",
+  "private": true,
+  "description": "LPL-TV · 英雄联盟赛事高清直播与录像站（纯静态，JSONP 跨域，清晰度/倍速/B站弹幕）",
+  "type": "module",
+  "scripts": {
+    "serve": "node tools/serve.mjs 8080",
+    "bake": "node tools/bake.mjs --vods=160",
+    "bake:fast": "node tools/bake.mjs --vods=160 --no-danmaku",
+    "repair": "node tools/repair-danmaku.mjs",
+    "rooms": "node tools/refresh-liverooms.mjs",
+    "verify": "node tools/verify.mjs",
+    "verify:public": "node tools/verify-public.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

@@ -1,0 +1,17 @@
+# 依赖
+node_modules/
+
+# 验收 / 探针产生的临时截图与报告（每次跑都会重新生成）
+# 只忽略仓库根下的 data/；site/data/ 是部署必需的数据，必须提交
+/data/
+
+# 日志与系统文件
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

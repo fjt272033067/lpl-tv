@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>LPL-TV · 英雄联盟赛事高清直播与录像</title>
+    <meta
+      name="description"
+      content="LPL-TV：英雄联盟赛事高清直播与录像站。支持超清/高清多档清晰度切换、倍速播放、B站弹幕同步显示，支持看直播与看录播。"
+    />
+    <meta name="theme-color" content="#0b0e14" />
+    <meta name="referrer" content="no-referrer" />
+    <!-- 微信/QQ 内置浏览器（X5）适配 -->
+    <meta name="x5-orientation" content="landscape" />
+    <meta name="x5-fullscreen" content="true" />
+    <meta name="x5-page-mode" content="app" />
+    <meta name="browsermode" content="application" />
+    <meta name="full-screen" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300b3ff'/%3E%3Cpath d='M14 20h36v24H14z' fill='none' stroke='%23fff' stroke-width='4'/%3E%3Cpath d='M26 28l14 8-14 8z' fill='%23fff'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="assets/style.css" />
+  </head>
+  <body>
+    <a class="skip" href="#view">跳到主要内容</a>
+
+    <div id="wx-tip" class="wx-tip" hidden>
+      <span>
+        当前在<b>微信内置浏览器</b>中打开，直播与弹幕可能受限制。建议点右上角 <b>···</b> →「<b>在浏览器打开</b>」。
+      </span>
+      <button class="wx-close" id="wx-close" aria-label="关闭提示">×</button>
+    </div>
+
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="#/live">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 64 64" width="26" height="26">
+              <rect width="64" height="64" rx="14" fill="currentColor" opacity=".18" />
+              <path d="M14 20h36v24H14z" fill="none" stroke="currentColor" stroke-width="4" />
+              <path d="M26 28l14 8-14 8z" fill="currentColor" />
+            </svg>
+          </span>
+          <span class="brand-text">
+            <b>LPL-TV</b>
+            <small>英雄联盟赛事 · 高清直播 / 录像</small>
+          </span>
+        </a>
+
+        <nav class="nav" aria-label="主导航">
+          <a href="#/live" data-nav="live">直播</a>
+          <a href="#/vod" data-nav="vod">录像库</a>
+          <a href="#/schedule" data-nav="schedule">赛程</a>
+        </nav>
+
+        <form class="search" id="search-form" role="search">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+            <path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+          <input id="search-input" type="search" placeholder="搜索队伍 / 赛事 / 选手" autocomplete="off" aria-label="搜索" />
+        </form>
+
+        <button class="icon-btn" id="refresh-btn" title="重新拉取直播与最新内容数据" aria-label="刷新数据">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M20 11a8 8 0 1 0-1.6 5.4" />
+            <path d="M20 5v6h-6" />
+          </svg>
+        </button>
+
+        <button class="icon-btn mobile-only" id="nav-toggle" aria-label="展开导航">
+          <svg viewBox="0 0 24 24" width="20" height="20">
+            <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+      <div class="live-strip" id="live-strip" hidden></div>
+    </header>
+
+    <main id="view" class="view"></main>
+
+    <footer class="foot">
+      <div class="foot-inner">
+        <p>
+          <b>LPL-TV</b> 是一个面向英雄联盟赛事的技术型聚合播放器：清晰度与倍速由本站播放器控制，
+          弹幕数据来自 B 站公开接口，视频源为腾讯 LPL 官方公开直播/点播地址。
+        </p>
+        <p class="foot-dim">
+          非腾讯官方站点 · 所有视频版权归原权利人所有 · 本站不存储、不转存任何视频文件，仅做播放器与界面层
+        </p>
+      </div>
+    </footer>
+
+    <script src="assets/vendor/hls.min.js"></script>
+    <script src="assets/vendor/flv.min.js"></script>
+    <script src="assets/danmaku.js"></script>
+    <script src="assets/app.js"></script>
+  </body>
+</html>
