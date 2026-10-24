@@ -1688,7 +1688,8 @@
         cover: r.cover || '',
         room: r,
         expired: streamExpired(r),
-        playable: !!r.stream,
+        // 过期的流地址不算「可播」——主线路会自动跳过它，避免选到黑屏源
+        playable: !!r.stream && !streamExpired(r),
         viewers: r.online || 0,
       });
     });
@@ -1942,8 +1943,18 @@
       if (s.kind === 'bili') {
         p.opts.biliRoom = s.room;
         if (s.expired || !s.room.stream) {
+          // 流地址过期（B 站签名约 60 分钟）→ 自动切到还活着的线路，
+          // 而不是给用户留一块黑屏
+          const alt =
+            sources.find((x) => x.kind === 'tx' && x.healthy && x.playable) ||
+            sources.find((x) => x.kind === 'bili' && x.playable && !x.expired);
+          if (alt && alt.id !== s.id) {
+            p.showMsg('该路直播地址已过期，正在切换到 ' + alt.name);
+            applySource(alt, true);
+            return;
+          }
           p.showMsgAction(
-            '该直播源地址已过期或尚未生成；可切到其它线路，或直接去 B 站直播间观看。',
+            '该直播源地址已过期或尚未生成；可点下方按钮直接去 B 站直播间观看。',
             '打开B站直播间',
             () => {
               window.open(s.room.biliUrl || 'https://live.bilibili.com/' + s.room.roomid, '_blank', 'noopener');
@@ -2042,7 +2053,38 @@
         applySource(s);
       };
     } else {
-      p.showMsg('当前没有可用的直播源', true);
+      // 站内没有可用信号时，线路菜单依然要给出「平台官方直播间」入口
+      // （那些是永远实时的），不能只剩一句「没有可用直播源」
+      p.showMsgAction(
+        '当前没有可用的站内直播信号（赛事休赛或地址已过期）。可切到斗鱼 / 虎牙 / B 站官方直播间观看。',
+        '打开斗鱼 LPL 官方直播间',
+        () => {
+          const ext = sources.find((x) => x.kind === 'ext');
+          if (ext) window.open(ext.external, '_blank', 'noopener');
+        }
+      );
+      if (sources.length) {
+        p.setSources(
+          sources.map((s) => ({
+            id: s.id,
+            name: s.name,
+            sub: s.sub,
+            source: s,
+            external: s.kind === 'ext' ? s.external : s.kind === 'bili' ? s.room.biliUrl : null,
+          })),
+          sources[0].id
+        );
+        p.opts.onSource = (item) => {
+          const s = item.source;
+          if (!s) return;
+          if (s.kind === 'ext' || item.external) {
+            const w = window.open(item.external || s.external, '_blank', 'noopener');
+            if (!w) toast('浏览器拦截了新标签，请允许弹窗后重试');
+            return;
+          }
+          applySource(s);
+        };
+      }
     }
 
     // 注意：left 已在创建 Player 之后挂进 hero，这里再 append 会把它移到末尾、
@@ -2253,11 +2295,18 @@
     strip.hidden = false;
     strip.innerHTML = '';
     const inner = el('div', { class: 'live-strip-inner' });
-    inner.appendChild(el('span', { class: 'strip-label' }, [el('span', { class: 'dot-live' }), '正在直播']));
-    sources.forEach((s) => {
-      if (s.kind === 'ext') return;
-      // 没信号的源（腾讯常驻僵尸房）不该出现在「正在直播」里
-      if (s.kind === 'tx' && !s.healthy) return;
+    // 只有真正有信号的源才算「正在直播」
+    // 腾讯常驻僵尸房（healthy=false）虽然有 streams，但实际无信号，不能进通知条
+    const liveSources = sources.filter(
+      (s) => s.kind !== 'ext' && s.playable && !(s.kind === 'tx' && !s.healthy)
+    );
+    inner.appendChild(
+      el('span', { class: 'strip-label' }, [
+        el('span', { class: 'dot-live' }),
+        liveSources.length ? '正在直播' : '暂无直播信号',
+      ])
+    );
+    liveSources.forEach((s) => {
       const q =
         s.kind === 'bili'
           ? s.room && s.room.stream

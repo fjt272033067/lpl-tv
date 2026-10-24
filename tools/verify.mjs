@@ -241,6 +241,49 @@ function check(name, pass, detail) {
   check('赛事横幅已渲染', visual.banner, visual.bannerLogos + ' 个队徽');
   check('有回到顶部按钮', visual.toTop);
   check('通知条为单行紧凑信息', visual.stripItems > 0 && visual.stripRun === 0, visual.stripItems + ' 项');
+
+  // 关键判据：B 站流地址约 60 分钟过期（B 站签名机制），
+  // 过期后必须自动切到还活着的线路，而不是给用户留一块黑屏。
+  // 这里把 liverooms.json 响应里的 expires 改成过去时间来模拟过期。
+  const expPage = await ctx.newPage();
+  await expPage.route('**/data/liverooms.json', async (route) => {
+    const res = await route.fetch();
+    const j = await res.json();
+    (j.rooms || []).forEach((r) => {
+      if (r.stream) r.stream.expires = Math.floor(Date.now() / 1000) - 3600;
+    });
+    await route.fulfill({
+      response: res,
+      body: JSON.stringify(j),
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  await expPage.goto(base + '/#/live', { waitUntil: 'domcontentloaded' });
+  await expPage.waitForTimeout(11000);
+  const expState = await expPage.evaluate(() => {
+    const v = document.querySelector('.player video');
+    const strip = [...document.querySelectorAll('.live-strip .strip-item')].map((e) => e.textContent.trim());
+    return {
+      videoW: v ? v.videoWidth : 0,
+      playing: v ? !v.paused : false,
+      srcMenu: document.querySelectorAll('.menu[data-menu="source"] .menu-item').length,
+      strip: strip,
+      stripUniq: new Set(strip).size,
+    };
+  });
+  console.log('   过期降级: ' + JSON.stringify(expState));
+  check(
+    '流地址过期后自动切到可用线路',
+    expState.videoW > 0 && expState.playing,
+    `${expState.videoW}px playing=${expState.playing}`
+  );
+  check(
+    '过期降级后仍有平台官方直播间入口',
+    expState.srcMenu >= 3,
+    expState.srcMenu + ' 条线路'
+  );
+  check('通知条无重复文案', expState.stripUniq === expState.strip.length, expState.strip.join(' / '));
+  await expPage.close();
   await page.screenshot({ path: path.join(SHOTS, '01-live.png'), fullPage: false });
 
   // 打开清晰度菜单截图（同样走 DOM 触发，避免 <video> 遮挡命中测试）
