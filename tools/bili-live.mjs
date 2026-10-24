@@ -67,7 +67,10 @@ export async function fetchRoomInfo(roomId) {
     title: String(d.title || '').replace(/<[^>]+>/g, ''),
     live: d.live_status === 1,
     liveStatus: d.live_status,
+    // 注意：B 站 get_info 的 online 是「累计人气值」不是同时在线人数
+    // （实测同一房间会从 200 万一路涨到 1 亿），拿它当「人在看」会明显失真。
     online: d.online || 0,
+    attention: d.attention || 0,
     uname: d.uname || '',
     area: d.area_name || '',
     liveTime: d.live_time || '',
@@ -134,6 +137,7 @@ export async function fetchLiveRoom(roomId) {
     title: info.title,
     live: info.live,
     online: info.online,
+    attention: info.attention,
     uname: info.uname,
     area: info.area,
     stream: stream

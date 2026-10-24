@@ -779,3 +779,109 @@ td .status { font-size: 11.5px; }
 .quality-bar .qb-switch:hover { background: rgba(0, 179, 255, .22); }
 .quality-bar .qb-note { color: var(--text-faint); font-size: 12px; }
 .card.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* ============================================================
+   平台标识色：让不同平台的线路一眼可辨
+   ============================================================ */
+.plat-bili { color: #fb7299; border-color: rgba(251,114,153,.45); background: rgba(251,114,153,.12); }
+.plat-douyu { color: #ff7f24; border-color: rgba(255,127,36,.45); background: rgba(255,127,36,.12); }
+.plat-huya { color: #f7c948; border-color: rgba(247,201,72,.45); background: rgba(247,201,72,.12); }
+.plat-tencent { color: #25c2ff; border-color: rgba(37,194,255,.45); background: rgba(37,194,255,.12); }
+.card-hd.plat-bili, .card-hd.plat-douyu, .card-hd.plat-huya, .card-hd.plat-tencent {
+    border-color: currentColor;
+    background: currentColor;
+    color: #0b0e14;
+    opacity: .95;
+}
+
+/* ============================================================
+   直播页：赛事横幅（队徽 + 对阵 + 比分）
+   ============================================================ */
+.event-banner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 12px;
+    padding: 14px 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background:
+        radial-gradient(120% 140% at 0% 0%, rgba(37,194,255,.16), transparent 55%),
+        radial-gradient(120% 140% at 100% 100%, rgba(255,61,97,.14), transparent 55%),
+        var(--surface);
+    overflow: hidden;
+}
+.event-banner::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.04), transparent);
+    pointer-events: none;
+}
+.event-banner .eb-game { font-size: 15px; font-weight: 800; color: var(--text); letter-spacing: .3px; }
+.event-banner .eb-phase { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+.event-banner .eb-teams { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.event-banner .eb-side { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 700; color: var(--text); }
+.event-banner .eb-side img { width: 26px; height: 26px; object-fit: contain; }
+.event-banner .eb-score {
+    font-size: 17px; font-weight: 800; color: var(--accent);
+    font-variant-numeric: tabular-nums; padding: 0 4px;
+}
+.event-banner .eb-vs { color: var(--text-faint); font-size: 12px; }
+
+/* ============================================================
+   线路卡片预览图（构建期抓直播流封面帧）
+   ============================================================ */
+.card-cover.has-shot { background: #05070c; }
+.card-cover .shot {
+    position: relative; z-index: 1;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.card-cover .shot-fallback {
+    position: absolute; inset: 0; z-index: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-faint); font-size: 12px;
+    background: linear-gradient(135deg, #121722, #1b2130);
+}
+.card-cover { position: relative; overflow: hidden; }
+
+/* ============================================================
+   回到顶部
+   ============================================================ */
+.to-top {
+    position: fixed;
+    right: 22px; bottom: 26px;
+    width: 40px; height: 40px;
+    display: none;
+    align-items: center; justify-content: center;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: rgba(20,25,36,.92);
+    backdrop-filter: blur(8px);
+    color: var(--text);
+    cursor: pointer;
+    z-index: 60;
+    box-shadow: 0 6px 20px rgba(0,0,0,.4);
+}
+.to-top.show { display: flex; }
+.to-top:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 平台注入的悬浮球：缩小并下移，避免遮挡播放器 */
+#minimax-floating-ball { transform: scale(.72); transform-origin: bottom right; opacity: .75; }
+#minimax-floating-ball:hover { transform: scale(.82); opacity: 1; }
+@media (max-width: 720px) { #minimax-floating-ball { display: none; } }
+
+/* ============================================================
+   通知条：无缝横向滚动（内容渲染两遍 + translateX -50%）
+   ============================================================ */
+/* 通知条：单行紧凑信息，可横向滑动（不滚动动画，避免看起来像重复） */
+.live-strip-inner { flex-wrap: nowrap; overflow-x: auto; }
+.live-strip-inner::-webkit-scrollbar { display: none; }
+.strip-item {
+    white-space: nowrap;
+    flex: 0 0 auto;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

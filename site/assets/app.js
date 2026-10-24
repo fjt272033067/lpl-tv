@@ -1441,6 +1441,41 @@
    *    （被 Chrome ORB 拦），所以流地址只能构建期抓，有效期约 60 分钟。
    * ------------------------------------------------------------------ */
 
+  /** 平台名 → 配色 class（斗鱼橙 / 虎牙黄 / B站粉 / 腾讯蓝） */
+  function platClass(platform) {
+    const p = String(platform || '');
+    if (p.indexOf('哔哩') >= 0 || p.indexOf('B站') >= 0) return 'plat-bili';
+    if (p.indexOf('斗鱼') >= 0) return 'plat-douyu';
+    if (p.indexOf('虎牙') >= 0) return 'plat-huya';
+    if (p.indexOf('腾讯') >= 0) return 'plat-tencent';
+    return '';
+  }
+
+  /**
+   * 格式化人气值。
+   * B 站 get_info 的 online 是「累计人气」而非同时在线（同一房间会从 200 万
+   * 一路涨到 1 亿），当成「N 人在看」会明显失真，所以统一按「人气值」表述。
+   */
+  function fmtPopularity(n) {
+    const v = Number(n) || 0;
+    if (v >= 100000000) return (v / 100000000).toFixed(2) + ' 亿';
+    if (v >= 10000) return (v / 10000).toFixed(1) + ' 万';
+    return v.toLocaleString();
+  }
+
+  /** B 站 qn 档位 → 实际分辨率（B站转码档位与推流码率的对应关系） */
+  function qnToRes(qn) {
+    switch (Number(qn)) {
+      case 15000: return '2K';
+      case 10000: return '原画';
+      case 400: return '1080P';
+      case 250: return '720P';
+      case 150: return '480P';
+      case 80: return '360P';
+      default: return '';
+    }
+  }
+
   /** B 站直播流地址是否已过期（构建期抓取，签名有效期约 60 分钟） */
   function streamExpired(room, marginSec) {
     if (!room || !room.stream) return true;
@@ -1489,6 +1524,67 @@
       await new Promise((r) => setTimeout(r, 1200));
       return fetchVodWithRetry(vid, defn, n + 1);
     }
+  }
+
+  /**
+   * 赛事横幅：显示赛事 + 对阵 + 比分 + 队徽。
+   * 优先用当前线路的官方对阵信息（腾讯 match），没有再退回赛程里最近的一场，
+   * 否则会出现「横幅和右侧卡片说的不是同一场比赛」的矛盾。
+   */
+  async function buildEventBanner() {
+    let list = [];
+    try {
+      list = await Repo.loadSchedule();
+    } catch (e) {
+      return null;
+    }
+    await ensureTeamLogos();
+    const now = Date.now();
+    const played = list
+      .filter(
+        (m) =>
+          m.date &&
+          m.teamA &&
+          m.teamB &&
+          !/^D\d/.test(m.teamA) &&
+          m.score &&
+          m.score !== '0:0' &&
+          !/^(总决赛|半决赛|季军赛)/.test(m.teamA)
+      )
+      .map((m) => ({ m, ts: new Date(String(m.date).replace(/-/g, '/')).getTime() }))
+      .filter((x) => isFinite(x.ts))
+      .sort((a, b) => b.ts - a.ts);
+    const cur = played.find((x) => now - x.ts < 6 * 3600000 && now - x.ts > -3 * 3600000) || played[0];
+    if (!cur) return null;
+    return renderBanner(cur.m);
+  }
+
+  /** 用一条比赛信息填充横幅内容 */
+  function renderBanner(m) {
+    const a = teamByTeamId(m.teamIdA, m.teamA);
+    const b = teamByTeamId(m.teamIdB, m.teamB);
+    const box = el('div', { class: 'event-banner' });
+    box.appendChild(
+      el('div', {}, [
+        el('div', { class: 'eb-game', text: m.game || '赛事' }),
+        el('div', {
+          class: 'eb-phase',
+          text: [m.phase, m.mode, String(m.date || '').slice(0, 10)].filter(Boolean).join(' · '),
+        }),
+      ])
+    );
+    const teams = el('div', { class: 'eb-teams' });
+    const side = (info) => {
+      const s = el('div', { class: 'eb-side' });
+      if (info.logo) s.appendChild(el('img', { src: info.logo, alt: info.name, loading: 'lazy' }));
+      s.appendChild(el('span', { text: info.name || '—' }));
+      return s;
+    };
+    teams.appendChild(side(a));
+    teams.appendChild(el('span', { class: 'eb-score', text: m.score || '0 : 0' }));
+    teams.appendChild(side(b));
+    box.appendChild(teams);
+    return box;
   }
 
   async function renderLive() {
@@ -1565,6 +1661,7 @@
         name: (r.title || 'B站直播间').slice(0, 28),
         sub: r.roomid + ' · ' + ((r.stream && r.stream.qnName) || '源未就绪'),
         platform: '哔哩哔哩',
+        cover: r.cover || '',
         room: r,
         expired: streamExpired(r),
         playable: !!r.stream,
@@ -1580,6 +1677,7 @@
         name: healthy ? '腾讯官方源' : '腾讯官方源（当前未开播）',
         sub: healthy ? l.streams[0].name : '无信号 · 已置底',
         platform: '腾讯',
+        cover: (txCovers && txCovers[String(l.anchorId)]) || '',
         live: l,
         streams: l.streams,
         playable: true,
@@ -1639,6 +1737,9 @@
     view.innerHTML = '';
     const hero = el('div', { class: 'hero' });
     const left = el('div');
+    // 赛事横幅：队徽 + 对阵 + 比分（给页面一个「赛事感」的视觉锚点）
+    let bannerBox = await buildEventBanner();
+    if (bannerBox) left.appendChild(bannerBox);
     // 画质条：如实显示当前实际分辨率 + 一键切到更高画质档位
     const qBar = el('div', { class: 'quality-bar' });
     left.appendChild(qBar);
@@ -1651,18 +1752,9 @@
     p.renderSpeedMenu();
     p.renderDmMenu();
 
-  /** B 站 qn 档位 → 实际分辨率（B站转码档位与推流码率的对应关系） */
-  function qnToRes(qn) {
-    switch (Number(qn)) {
-      case 15000: return '2K';
-      case 10000: return '原画';
-      case 400: return '1080P';
-      case 250: return '720P';
-      case 150: return '480P';
-      case 80: return '360P';
-      default: return '';
-    }
-  }
+    // 先把主区挂进 hero，再渲染侧栏 —— 顺序反了会让侧栏占掉左列、
+    // 把播放器挤到右列（布局整体左右颠倒）
+    hero.appendChild(left);
 
   /** 当前线路的展示信息 */
     const srcInfo = (s) => {
@@ -1674,13 +1766,13 @@
           title: s.room.title || 'B站赛事直播间',
           meta: [
             s.room.area || '赛事',
-            (s.room.online || 0).toLocaleString() + ' 人在看',
+            fmtPopularity(s.room.online) + ' 人气值',
             s.expired ? '流地址已过期' : '站内直连 · ' + (s.room.stream.qnName || '高清'),
             !s.expired && leftMin ? '地址约 ' + leftMin + ' 分钟后刷新' : '',
           ]
             .filter(Boolean)
             .join(' · '),
-          viewers: (s.room.online || 0) ? (s.room.online || 0).toLocaleString() + ' 人观看' : '',
+          viewers: (s.room.online || 0) ? fmtPopularity(s.room.online) + ' 人气' : '',
         };
       }
       if (s.kind === 'ext') {
@@ -1725,7 +1817,7 @@
               qnToRes(r.stream.qn) +
               ' · ' +
               (r.title || r.roomid).slice(0, 12),
-            sub: '房间 ' + r.roomid + ' · ' + (r.online || 0).toLocaleString() + ' 人在看',
+            sub: '房间 ' + r.roomid + ' · ' + fmtPopularity(r.online) + ' 人气',
             room: r,
             kind: 'bili',
           }));
@@ -1776,6 +1868,45 @@
           })
         );
         qBar.appendChild(el('span', { class: 'qb-note', text: '（不同房间可能转播不同场次）' }));
+      }
+    };
+
+    /** 播放器下方的标题块：跟随当前线路更新（须在 applySource 之前定义） */
+    const titleBox = el('div', { style: { marginTop: '14px' } });
+    left.appendChild(titleBox);
+    // 腾讯官方对阵信息 → 统一的横幅结构
+    const fromTxMatch = (gm) => ({
+      game: gm.GameName || '',
+      phase: gm.GameProcName || '',
+      mode: gm.GameModeName || '',
+      date: gm.MatchDate || '',
+      teamA: gm.TeamShortNameA || '',
+      teamIdA: gm.TeamA || '',
+      teamB: gm.TeamShortNameB || '',
+      teamIdB: gm.TeamB || '',
+      score: (gm.ScoreA != null ? gm.ScoreA : 0) + ' : ' + (gm.ScoreB != null ? gm.ScoreB : 0),
+    });
+    const updateTitle = (s) => {
+      const inf = srcInfo(s);
+      titleBox.innerHTML = '';
+      titleBox.appendChild(
+        el('h2', {
+          style: { margin: '0 0 6px', fontSize: '18px' },
+          text: inf.title,
+        })
+      );
+      titleBox.appendChild(
+        el('div', {
+          style: { color: 'var(--text-faint)', fontSize: '13px' },
+          text: inf.meta,
+        })
+      );
+      // 横幅跟着当前线路走：腾讯源有官方对阵信息时优先用它，
+      // 免得横幅显示的是另一场比赛，和右侧卡片自相矛盾
+      if (s && s.live && s.live.match && bannerBox && bannerBox.parentNode) {
+        const nb = renderBanner(fromTxMatch(s.live.match));
+        bannerBox.parentNode.replaceChild(nb, bannerBox);
+        bannerBox = nb;
       }
     };
 
@@ -1856,6 +1987,7 @@
       currentSource = s;
       currentRes = { w: 0, h: 0 };
       renderQualityBar();
+      if (updateTitle) updateTitle(s);
       if (!quiet) toast('已切换到 ' + s.name);
     };
 
@@ -1889,7 +2021,8 @@
       p.showMsg('当前没有可用的直播源', true);
     }
 
-    hero.appendChild(left);
+    // 注意：left 已在创建 Player 之后挂进 hero，这里再 append 会把它移到末尾、
+    // 导致左右两列颠倒。
 
     // 没有可用直播时：给出下一场倒计时，别只丢一句「暂无直播」
     if (!main) {
@@ -1943,19 +2076,8 @@
       );
     }
 
-    const inf0 = srcInfo(main);
-    left.appendChild(el('div', { style: { marginTop: '14px' } }, [
-      el('h2', {
-        style: { margin: '0 0 6px', fontSize: '18px' },
-        text: inf0.title,
-      }),
-      el('div', {
-        style: { color: 'var(--text-faint)', fontSize: '13px' },
-        text: inf0.meta,
-      }),
-    ]));
-
-    hero.appendChild(liveSourcePanel(main, inf0));
+    // 注意：侧栏已在 applySource() 内渲染过一次，这里不要重复追加
+    // （重复追加会让「比赛信息卡片」在页面上出现两组完全相同的内容）
     view.appendChild(hero);
 
     // 线路卡片：分两组 —— 本站直连 / 平台官方直播间（更高画质）
@@ -1985,15 +2107,25 @@
           syncSources(s.id);
         },
       }, [
-        el('div', { class: 'card-cover' }, [
-          el('div', { class: 'ovl' }),
-          el('span', { class: 'card-hd', text: s.kind === 'bili' ? (s.room.stream ? qnToRes(s.room.stream.qn) : s.platform) : s.platform }),
+        el('div', { class: 'card-cover' + (s.cover ? ' has-shot' : '') }, [
+          s.cover
+            ? el('img', {
+                class: 'shot',
+                src: s.cover,
+                alt: '',
+                loading: 'lazy',
+                onerror: (e) => {
+                  e.target.style.display = 'none';
+                },
+              })
+            : el('div', { class: 'shot-fallback', text: (s.platform || '直播') + ' 直播间' }),
+          el('span', { class: 'card-hd ' + platClass(s.platform), text: s.kind === 'bili' ? (s.room.stream ? qnToRes(s.room.stream.qn) : s.platform) : s.platform }),
         ]),
         el('div', { class: 'card-body' }, [
           el('div', { class: 'card-title', text: s.name }),
           el('div', { class: 'card-meta' }, [
             el('span', { text: s.sub || '—' }),
-            el('span', { text: s.kind === 'ext' ? '新标签打开' : (s.viewers || 0).toLocaleString() + ' 人在看' }),
+            el('span', { text: s.kind === 'ext' ? '新标签打开' : fmtPopularity(s.viewers) + ' 人气' }),
           ]),
         ]),
       ]);
@@ -2034,7 +2166,7 @@
     if (source && source.kind === 'bili') {
       addRow('平台', '哔哩哔哩（站内直连）');
       addRow('房间号', String(source.room.roomid));
-      addRow('观看人数', (source.room.online || 0).toLocaleString());
+      addRow('房间人气', fmtPopularity(source.room.online) + (source.room.attention ? '（关注 ' + fmtPopularity(source.room.attention) + '）' : ''));
       addRow('清晰度', source.room.stream ? source.room.stream.qnName || '高清' : '源未就绪');
       addRow(
         '流地址',
@@ -2100,15 +2232,26 @@
     inner.appendChild(el('span', { class: 'strip-label' }, [el('span', { class: 'dot-live' }), '正在直播']));
     sources.forEach((s) => {
       if (s.kind === 'ext') return;
+      // 没信号的源（腾讯常驻僵尸房）不该出现在「正在直播」里
+      if (s.kind === 'tx' && !s.healthy) return;
       const q =
         s.kind === 'bili'
           ? s.room && s.room.stream
-            ? (s.room.stream.qnName || '高清') + ' · ' + (s.room.title || '').slice(0, 16)
+            ? (s.room.stream.qnName || '高清') + ' ' + qnToRes(s.room.stream.qn)
             : '源未就绪'
           : s.streams && s.streams[0]
           ? s.streams[0].name
           : '';
-      inner.appendChild(el('a', { class: 'strip-item', href: '#/live', text: (s.name || '') + ' · ' + q }));
+      // 只给「平台 + 清晰度」这种短信息，完整房间标题放 title 里 hover 看。
+      // 之前把长标题塞进通知条，结果既溢出又被裁成半截。
+      inner.appendChild(
+        el('a', {
+          class: 'strip-item',
+          href: '#/live',
+          text: (s.platform || '') + ' · ' + q,
+          title: (s.name || '') + '（房间 ' + (s.room ? s.room.roomid : '-') + '）',
+        })
+      );
     });
     strip.appendChild(inner);
   }
@@ -2116,15 +2259,17 @@
   /** 直播弹幕房间映射 + 其它平台官方直播间入口（构建期烘焙） */
   let biliRooms = [];
   let externalRooms = [];
+  let txCovers = {};
   async function ensureBiliRooms() {
     if (biliRooms.length) return biliRooms;
     try {
       const res = await fetch('data/liverooms.json', { cache: 'no-cache' });
       if (res.ok) {
         const j = await res.json();
-        // 兼容两种格式：旧版是数组，新版是 {rooms:[...], currentMatch, externalRooms}
+        // 兼容两种格式：旧版是数组，新版是 {rooms:[...], currentMatch, externalRooms, txCovers}
         biliRooms = Array.isArray(j) ? j : (j.rooms || []);
         externalRooms = Array.isArray(j) ? [] : (j.externalRooms || []);
+        txCovers = Array.isArray(j) ? {} : (j.txCovers || {});
       }
     } catch (e) {
       biliRooms = [];
@@ -2151,9 +2296,15 @@
   }
 
   function findBiliRoom(text, eventHint) {
-    if (!text && !eventHint) return null;
     // 正在直播的房间优先
     const sorted = biliRooms.slice().sort((a, b) => (b.live ? 1 : 0) - (a.live ? 1 : 0));
+    // 赛事分区优先（正片 > 散户复盘）
+    const byArea = sorted.slice().sort((a, b) => {
+      const ea = /赛事/.test(a.area || '') ? 1 : 0;
+      const eb = /赛事/.test(b.area || '') ? 1 : 0;
+      if (ea !== eb) return eb - ea;
+      return 0;
+    });
     const key = teamKey(text);
     if (key) {
       const exact = sorted.find((r) => teamKey(r.title) === key);
@@ -2167,8 +2318,8 @@
         sorted.find((r) => eventKey(r.title) === ev);
       if (alt) return alt;
     }
-    // 再退一步：只要有正在直播的房间就用它（赛事正在进行的通用二路/4K 直播间）
-    const anyLive = sorted.find((r) => r.live) || sorted[0];
+    // 再退一步：只要有正在直播的赛事房间就用它
+    const anyLive = byArea.find((r) => r.live) || sorted.find((r) => r.live) || byArea[0] || sorted[0];
     return anyLive || null;
   }
 
@@ -2800,6 +2951,18 @@
     route();
     toast('已刷新：腾讯直播源 / 官方最新内容 / 队伍与赛程（录像与弹幕为构建期快照）');
   });
+
+  // 回到顶部（页面较长，直播页尤其明显）
+  const toTop = el('button', { class: 'to-top', 'aria-label': '回到顶部', title: '回到顶部', html: '↑' });
+  document.body.appendChild(toTop);
+  window.addEventListener(
+    'scroll',
+    () => {
+      toTop.classList.toggle('show', window.scrollY > 600);
+    },
+    { passive: true }
+  );
+  toTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
 
   // 顶部搜索：跳到录像库并带上关键词
   $('#search-form').addEventListener('submit', (e) => {

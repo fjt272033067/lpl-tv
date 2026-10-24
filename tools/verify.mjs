@@ -204,6 +204,43 @@ function check(name, pass, detail) {
     Math.abs(volTest.after - 0.35) < 0.02 && volTest.saved !== null,
     `${volTest.before} → ${volTest.after} saved=${volTest.saved} ${volTest.err || ''}`
   );
+
+  // 视觉/体验判据（对应外部访客反馈）
+  const visual = await page.evaluate(() => {
+    const panels = document.querySelectorAll('.side-panel');
+    const cards = [...document.querySelectorAll('.card')];
+    const withShot = cards.filter((c) => c.querySelector('.card-cover .shot'));
+    const platColors = cards
+      .map((c) => (c.querySelector('.card-hd') || {}).className || '')
+      .filter((c) => /plat-/.test(c));
+    return {
+      panels: panels.length,
+      panelTitles: [...panels].map((p) => (p.querySelector('.side-title') || {}).textContent || ''),
+      cards: cards.length,
+      withShot: withShot.length,
+      platKinds: [...new Set(platColors.map((c) => (c.match(/plat-\w+/) || [''])[0]))],
+      banner: !!document.querySelector('.event-banner'),
+      bannerLogos: document.querySelectorAll('.event-banner .eb-side img').length,
+      toTop: !!document.querySelector('.to-top'),
+      stripRun: document.querySelectorAll('.live-strip .strip-run').length,
+      stripItems: document.querySelectorAll('.live-strip .strip-item').length,
+      // 布局顺序：主区（播放器）必须在侧栏之前
+      heroFirstIsPlayer: (() => {
+        const hero = document.querySelector('.hero');
+        if (!hero) return false;
+        return !!hero.firstElementChild && !!hero.firstElementChild.querySelector('.player');
+      })(),
+    };
+  });
+  console.log('   视觉: ' + JSON.stringify(visual));
+  // 比赛信息卡片不得重复渲染（同一组内容出现两次）
+  check('比赛信息卡片不重复', visual.panels <= 1, visual.panels + ' 个侧栏');
+  check('播放器在主区（左右列未颠倒）', visual.heroFirstIsPlayer);
+  check('线路卡片有预览缩略图', visual.withShot > 0, visual.withShot + '/' + visual.cards + ' 张');
+  check('平台标签有区分色', visual.platKinds.length >= 2, visual.platKinds.join(','));
+  check('赛事横幅已渲染', visual.banner, visual.bannerLogos + ' 个队徽');
+  check('有回到顶部按钮', visual.toTop);
+  check('通知条为单行紧凑信息', visual.stripItems > 0 && visual.stripRun === 0, visual.stripItems + ' 项');
   await page.screenshot({ path: path.join(SHOTS, '01-live.png'), fullPage: false });
 
   // 打开清晰度菜单截图（同样走 DOM 触发，避免 <video> 遮挡命中测试）

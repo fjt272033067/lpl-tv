@@ -164,6 +164,40 @@ check(
 const distinctLines = new Set((lines.items || []).map((t) => t.replace(/^[✓\s]*/, '').split('·')[0].trim())).size;
 check('各线路文案互不相同', distinctLines >= Math.min(3, (lines.items || []).length), distinctLines + ' 种');
 
+// 视觉/体验判据
+const visual = await page.evaluate(() => {
+  const panels = document.querySelectorAll('.side-panel');
+  const cards = [...document.querySelectorAll('.card')];
+  const withShot = cards.filter((c) => c.querySelector('.card-cover .shot'));
+  const platColors = cards
+    .map((c) => (c.querySelector('.card-hd') || {}).className || '')
+    .filter((c) => /plat-/.test(c));
+  const hero = document.querySelector('.hero');
+  return {
+    panels: panels.length,
+    cards: cards.length,
+    withShot: withShot.length,
+    platKinds: [...new Set(platColors.map((c) => (c.match(/plat-\w+/) || [''])[0]))],
+    banner: !!document.querySelector('.event-banner'),
+    bannerLogos: document.querySelectorAll('.event-banner .eb-side img').length,
+    toTop: !!document.querySelector('.to-top'),
+    stripItems: document.querySelectorAll('.live-strip .strip-item').length,
+    heroFirstIsPlayer: !!(
+      hero &&
+      hero.firstElementChild &&
+      hero.firstElementChild.querySelector('.player')
+    ),
+  };
+});
+console.log('   视觉: ' + JSON.stringify(visual));
+check('比赛信息卡片不重复', visual.panels <= 1, visual.panels + ' 个侧栏');
+check('播放器在主区（左右列未颠倒）', visual.heroFirstIsPlayer);
+check('线路卡片有预览缩略图', visual.withShot > 0, visual.withShot + '/' + visual.cards + ' 张');
+check('平台标签有区分色', visual.platKinds.length >= 2, visual.platKinds.join(','));
+check('赛事横幅已渲染', visual.banner, visual.bannerLogos + ' 个队徽');
+check('有回到顶部按钮', visual.toTop);
+check('通知条为单行紧凑信息', visual.stripItems > 0, visual.stripItems + ' 项');
+
 // 音量可调 + 记忆
 const volTest = await page.evaluate(async () => {
   const v = document.querySelector('.player video');

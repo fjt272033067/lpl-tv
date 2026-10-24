@@ -68,6 +68,7 @@ for (const kw of keywords) {
 }
 
 /* 3) 标记 live_status，并抓取直播流地址（只有构建期能拿到，运行时无 CORS） */
+const COVER_DIR = path.join(DATA, 'cover');
 const out = [];
 for (const r of rooms.values()) {
   const info = await fetchLiveRoom(r.roomid);
@@ -78,13 +79,30 @@ for (const r of rooms.values()) {
     title: info.title || r.title,
     live: info.live,
     online: info.online || 0,
+    attention: info.attention || 0,
     uname: info.uname || '',
     area: info.area || '',
+    cover: '',
     stream: info.stream || null,
     biliUrl: info.biliUrl,
   });
   await sleep(220);
 }
+
+// 抓封面帧（必须在写 json 之前：流地址有效期约 60 分钟，抓帧要趁新）
+let txCovers = {};
+try {
+  const { captureCovers, captureTencentCovers } = await import('./capture-covers.mjs');
+  captureCovers(out.filter((r) => r.live && r.stream), COVER_DIR);
+  txCovers = captureTencentCovers(COVER_DIR);
+} catch (e) {
+  console.log('封面抓取跳过：' + (e.message || '').split('\n')[0]);
+}
+out.forEach((r) => {
+  const f = path.join(COVER_DIR, `${r.roomid}.jpg`);
+  // 没有封面就留空，前端显示平台占位而不是 404
+  r.cover = fs.existsSync(f) && fs.statSync(f).size > 2000 ? 'data/cover/' + r.roomid + '.jpg' : '';
+});
 out.sort((a, b) => (b.live ? 1 : 0) - (a.live ? 1 : 0));
 fs.writeFileSync(
   path.join(DATA, 'liverooms.json'),
@@ -94,10 +112,12 @@ fs.writeFileSync(
       currentMatch: subtitles[0] || '',
       rooms: out,
       externalRooms: EXTERNAL_ROOMS,
+      // 腾讯官方源的封面（anchorId → 图片路径）
+      txCovers: txCovers,
     },
     null,
     1
   )
 );
 console.log(`\n已写入 liverooms.json：${out.length} 个直播间，其中 ${out.filter((r) => r.live).length} 个正在直播`);
-out.slice(0, 12).forEach((r) => console.log(`   ${r.live ? '●' : '○'} ${r.roomid}  ${r.title.slice(0, 52)}`));
+out.slice(0, 12).forEach((r) => console.log(`   ${r.live ? '●' : '○'} ${r.roomid}  ${r.title.slice(0, 52)}${r.cover ? '  [有封面]' : ''}`));
