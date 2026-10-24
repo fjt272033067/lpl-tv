@@ -69,10 +69,40 @@ for (const kw of keywords) {
 
 /* 3) 标记 live_status，并抓取直播流地址（只有构建期能拿到，运行时无 CORS） */
 const COVER_DIR = path.join(DATA, 'cover');
+const livePath = path.join(DATA, 'liverooms.json');
+
+// 复用上一轮仍然有效的流地址：B 站签名约 60 分钟过期，
+// 没过期就没必要重新签发（重新签发还要重抓封面帧，耗时 40 秒）。
+// 阈值留 15 分钟余量，避免「刚签发完就过期」。
+const REUSE_MINUTES = 15;
+let prevByRoom = new Map();
+try {
+  if (fs.existsSync(livePath)) {
+    const prev = JSON.parse(fs.readFileSync(livePath, 'utf8'));
+    (prev.rooms || []).forEach((r) => prevByRoom.set(String(r.roomid), r));
+  }
+} catch (e) {
+  /* 旧文件损坏就全部重签 */
+}
+
 const out = [];
+let reused = 0;
+let resigned = 0;
+const resignedRooms = new Set();
 for (const r of rooms.values()) {
   const info = await fetchLiveRoom(r.roomid);
   if (!info) continue;
+  const prev = prevByRoom.get(String(info.roomid));
+  let stream = info.stream || null;
+  const prevLeft = prev && prev.stream ? Math.round((prev.stream.expires - Date.now() / 1000) / 60) : -1;
+  if (stream && prev && prevLeft > REUSE_MINUTES) {
+    // 旧地址还够用 → 复用，省一次 playUrl 请求
+    stream = prev.stream;
+    reused++;
+  } else if (stream) {
+    resigned++;
+    resignedRooms.add(String(info.roomid));
+  }
   out.push({
     roomid: info.roomid,
     uid: info.uid || r.uid || 0,
@@ -83,17 +113,22 @@ for (const r of rooms.values()) {
     uname: info.uname || '',
     area: info.area || '',
     cover: '',
-    stream: info.stream || null,
+    stream,
     biliUrl: info.biliUrl,
   });
   await sleep(220);
 }
+console.log(`  流地址：复用 ${reused} 个 / 重新签发 ${resigned} 个`);
 
 // 抓封面帧（必须在写 json 之前：流地址有效期约 60 分钟，抓帧要趁新）
 let txCovers = {};
 try {
   const { captureCovers, captureTencentCovers } = await import('./capture-covers.mjs');
-  captureCovers(out.filter((r) => r.live && r.stream), COVER_DIR);
+  // 只有本次新签发流地址的房间才需要重抓封面（复用地址的封面已在磁盘上）
+  captureCovers(
+    out.filter((r) => r.live && r.stream && resignedRooms.has(String(r.roomid))),
+    COVER_DIR
+  );
   txCovers = captureTencentCovers(COVER_DIR);
 } catch (e) {
   console.log('封面抓取跳过：' + (e.message || '').split('\n')[0]);
