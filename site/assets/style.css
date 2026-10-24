@@ -885,3 +885,69 @@ td .status { font-size: 11.5px; }
     overflow: hidden;
     text-overflow: ellipsis;
 }
+/* ============================================================
+   移动端：赛事横幅与画质条改为纵向堆叠，避免 390px 下被挤扁
+   ============================================================ */
+@media (max-width: 720px) {
+    .event-banner {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 12px 14px;
+    }
+    .event-banner .eb-game { font-size: 14px; }
+    .event-banner .eb-phase { font-size: 11.5px; }
+    .event-banner .eb-teams {
+        margin-left: 0;
+        width: 100%;
+        justify-content: space-between;
+        gap: 8px;
+    }
+    .event-banner .eb-side { font-size: 13px; gap: 5px; min-width: 0; }
+    .event-banner .eb-side span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .event-banner .eb-side img { width: 22px; height: 22px; flex: 0 0 auto; }
+    .event-banner .eb-score { font-size: 15px; padding: 0 2px; flex: 0 0 auto; }
+    .quality-bar { padding: 8px 12px; font-size: 12.5px; gap: 8px; }
+    .quality-bar .qb-switch { font-size: 12px; padding: 5px 10px; }
+    .to-top { right: 14px; bottom: 16px; width: 38px; height: 38px; }
+}
+/* ============================================================
+   移动端控制条：恢复音量滑块 + 菜单按钮图标化后的紧凑布局
+   （之前 .ctrl-vol 被整条隐藏，手机上无法调音量；
+     .label 隐藏后只有文字的清晰度/线路/倍速按钮会变成空白）
+   ============================================================ */
+@media (max-width: 720px) {
+    .ctrl-btn { padding: 8px 4px; min-width: 34px; min-height: 40px; }
+    .ctrl-row { gap: 2px; }
+    .ctrl-btn .ico {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 26px;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: -.2px;
+        color: inherit;
+    }
+    /* 音量滑块在触屏上常驻（hover 展开在小屏无效） */
+    .ctrl-vol { display: flex; }
+    .ctrl-vol input { width: 30px !important; opacity: 1 !important; }
+    .ctrl-time { font-size: 11px; padding: 0 4px; }
+    .ctrl-time .vcount { display: none; }
+    /* 播放器上的徽章在窄屏只保留前两个，其余信息在画质条/侧栏里 */
+    .player-top .badge:nth-child(n+3) { display: none; }
+    .player-top { padding: 8px 8px 30px; }
+}
+/* 移动端：筛选器改成两列网格（标签不竖排、下拉框不被压扁） */
+@media (max-width: 720px) {
+    .filters {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 8px 10px;
+        padding: 10px 12px;
+    }
+    .filters label { white-space: nowrap; }
+    .filters select, .filters input { width: 100%; min-width: 0; }
+    .filters .count { grid-column: 1 / -1; margin-left: 0; }
+}

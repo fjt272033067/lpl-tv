@@ -603,16 +603,25 @@ function check(name, pass, detail) {
     const cols = grid ? getComputedStyle(grid).gridTemplateColumns.split(' ').length : 0;
     const card = document.querySelector('.card');
     const btn = document.querySelector('.ctrl-btn');
+    // 筛选下拉框在窄屏容易被压扁，这里量实际宽度
+    const sel = document.querySelector('.filters select');
     return {
       cols,
       cardW: card ? Math.round(card.getBoundingClientRect().width) : 0,
       ctrlBtnH: btn ? Math.round(btn.getBoundingClientRect().height) : 0,
       rail: document.querySelectorAll('.rail-card').length,
+      selW: sel ? Math.round(sel.getBoundingClientRect().width) : 0,
+      labelH: (() => {
+        const l = document.querySelector('.filters label');
+        return l ? Math.round(l.getBoundingClientRect().height) : 0;
+      })(),
     };
   });
   console.log('   移动端布局: ' + JSON.stringify(mobLayout));
   check('移动端网格为两列', mobLayout.cols === 2, 'cols=' + mobLayout.cols);
   check('移动端触控按钮 ≥36px', mobLayout.ctrlBtnH >= 36, 'btn=' + mobLayout.ctrlBtnH + 'px');
+  check('移动端筛选下拉框可用（未被压扁）', mobLayout.selW >= 90, 'select 宽 ' + mobLayout.selW + 'px');
+  check('移动端筛选标签不竖排', mobLayout.labelH > 0 && mobLayout.labelH < 34, 'label 高 ' + mobLayout.labelH + 'px');
 
   // 移动端直播页 + 赛程页
   await mob.goto(base + '/#/live', { waitUntil: 'domcontentloaded' });
@@ -621,16 +630,50 @@ function check(name, pass, detail) {
   const mobLive = await mob.evaluate(() => {
     const v = document.querySelector('.player video');
     const p = document.querySelector('.player');
+    // 菜单按钮图标：窄屏会隐藏文字标签，只有文字的按钮会变成空白点
+    const iconBtns = {};
+    ['quality', 'source', 'speed'].forEach((k) => {
+      const b = document.querySelector('[data-ctl="' + k + '"]');
+      if (!b) return;
+      const ico = b.querySelector('.ico');
+      const r = b.getBoundingClientRect();
+      iconBtns[k] = ico ? Math.round(ico.getBoundingClientRect().width) : 0;
+    });
+    const vol = document.querySelector('.ctrl-vol input');
+    const ctrlRow = document.querySelector('.ctrl-row');
+    const playerW = p ? Math.round(p.getBoundingClientRect().width) : 0;
     return {
       hasVideo: !!v,
       playerH: p ? Math.round(p.getBoundingClientRect().height) : 0,
-      playerW: p ? Math.round(p.getBoundingClientRect().width) : 0,
+      playerW,
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      iconBtns,
+      volW: vol ? Math.round(vol.getBoundingClientRect().width) : 0,
+      volVisible: vol ? getComputedStyle(vol.parentElement).display !== 'none' : false,
+      ctrlRowW: ctrlRow ? Math.round(ctrlRow.getBoundingClientRect().width) : 0,
     };
   });
   console.log('   移动端直播: ' + JSON.stringify(mobLive));
   check('移动端播放器有高度（比例正常）', mobLive.playerH > 120, mobLive.playerW + 'x' + mobLive.playerH);
   check('移动端直播页无横向溢出', mobLive.overflow <= 2, 'overflow=' + mobLive.overflow + 'px');
+  // 窄屏下菜单按钮必须仍有可见图标（否则清晰度/线路/倍速变成空白点）
+  check(
+    '移动端清晰度/线路/倍速按钮有可见图标',
+    mobLive.iconBtns.quality > 0 && mobLive.iconBtns.source > 0 && mobLive.iconBtns.speed > 0,
+    JSON.stringify(mobLive.iconBtns)
+  );
+  // 音量必须可调（之前 .ctrl-vol 在窄屏被整条隐藏）
+  check(
+    '移动端音量滑块可见且可用',
+    mobLive.volVisible && mobLive.volW >= 24,
+    `visible=${mobLive.volVisible} width=${mobLive.volW}px`
+  );
+  // 控制条不能超出播放器宽度（否则最右侧按钮被裁掉）
+  check(
+    '移动端控制条不溢出播放器',
+    mobLive.ctrlRowW <= mobLive.playerW + 2,
+    `ctrl ${mobLive.ctrlRowW}px vs player ${mobLive.playerW}px`
+  );
 
   await mob.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
   await mob.waitForTimeout(3000);

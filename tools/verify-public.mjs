@@ -392,9 +392,13 @@ await mob.screenshot({ path: 'data/ui-smoke/08-mobile-vod.png' });
 const mobLayout = await mob.evaluate(() => {
   const grid = document.querySelector('.grid');
   const btn = document.querySelector('.ctrl-btn');
+  const sel = document.querySelector('.filters select');
+  const lbl = document.querySelector('.filters label');
   return {
     cols: grid ? getComputedStyle(grid).gridTemplateColumns.split(' ').length : 0,
     btnH: btn ? Math.round(btn.getBoundingClientRect().height) : 0,
+    selW: sel ? Math.round(sel.getBoundingClientRect().width) : 0,
+    labelH: lbl ? Math.round(lbl.getBoundingClientRect().height) : 0,
     overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     wxTipHidden: (() => {
       const t = document.querySelector('#wx-tip');
@@ -407,6 +411,55 @@ check('移动端网格两列', mobLayout.cols === 2, 'cols=' + mobLayout.cols);
 check('移动端触控按钮 ≥36px', mobLayout.btnH >= 36, mobLayout.btnH + 'px');
 check('移动端无横向溢出', mobLayout.overflow <= 2, 'overflow=' + mobLayout.overflow + 'px');
 check('微信提示条默认隐藏（非微信环境不打扰）', mobLayout.wxTipHidden);
+check('移动端筛选下拉框可用（未被压扁）', mobLayout.selW >= 90, 'select 宽 ' + mobLayout.selW + 'px');
+check('移动端筛选标签不竖排', mobLayout.labelH > 0 && mobLayout.labelH < 34, 'label 高 ' + mobLayout.labelH + 'px');
+
+// 移动端直播页：菜单按钮图标 / 音量滑块 / 控制条不溢出
+await mob.goto(URL + '/#/live', { waitUntil: 'domcontentloaded' });
+await mob.waitForTimeout(7000);
+await mob.screenshot({ path: 'data/ui-smoke/08b-mobile-live.png' });
+const mobLive = await mob.evaluate(() => {
+  const v = document.querySelector('.player video');
+  const p = document.querySelector('.player');
+  const iconBtns = {};
+  ['quality', 'source', 'speed'].forEach((k) => {
+    const b = document.querySelector('[data-ctl="' + k + '"]');
+    if (!b) return;
+    const ico = b.querySelector('.ico');
+    iconBtns[k] = ico ? Math.round(ico.getBoundingClientRect().width) : 0;
+  });
+  const vol = document.querySelector('.ctrl-vol input');
+  const ctrlRow = document.querySelector('.ctrl-row');
+  const playerW = p ? Math.round(p.getBoundingClientRect().width) : 0;
+  return {
+    hasVideo: !!v,
+    vw: v ? v.videoWidth : 0,
+    playerW,
+    iconBtns,
+    volW: vol ? Math.round(vol.getBoundingClientRect().width) : 0,
+    volVisible: vol ? getComputedStyle(vol.parentElement).display !== 'none' : false,
+    ctrlRowW: ctrlRow ? Math.round(ctrlRow.getBoundingClientRect().width) : 0,
+    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  };
+});
+console.log('   移动端直播: ' + JSON.stringify(mobLive));
+check('移动端直播页无横向溢出', mobLive.overflow <= 2, 'overflow=' + mobLive.overflow + 'px');
+check(
+  '移动端清晰度/线路/倍速按钮有可见图标',
+  mobLive.iconBtns.quality > 0 && mobLive.iconBtns.source > 0 && mobLive.iconBtns.speed > 0,
+  JSON.stringify(mobLive.iconBtns)
+);
+check(
+  '移动端音量滑块可见且可用',
+  mobLive.volVisible && mobLive.volW >= 24,
+  `visible=${mobLive.volVisible} width=${mobLive.volW}px`
+);
+check(
+  '移动端控制条不溢出播放器',
+  mobLive.ctrlRowW <= mobLive.playerW + 2,
+  `ctrl ${mobLive.ctrlRowW}px vs player ${mobLive.playerW}px`
+);
+
 await mob.goto(URL + '/#/schedule', { waitUntil: 'domcontentloaded' });
 await mob.waitForTimeout(3500);
 await mob.screenshot({ path: 'data/ui-smoke/08c-mobile-schedule.png' });

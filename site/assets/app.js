@@ -440,9 +440,23 @@
 
       row.appendChild(el('span', { class: 'ctrl-spacer' }));
 
-      this.btnQuality = el('button', { class: 'ctrl-btn', 'data-ctl': 'quality', html: '<span class="label">清晰度</span>' });
-      this.btnSource = el('button', { class: 'ctrl-btn', 'data-ctl': 'source', html: '<span class="label">线路</span>' });
-      this.btnSpeed = el('button', { class: 'ctrl-btn', 'data-ctl': 'speed', html: '<span class="label">倍速</span>' });
+      // 菜单按钮必须带图标：移动端会隐藏 .label 文字，
+      // 只有文字的按钮在手机上会变成空白点（清晰度/线路/倍速都受影响）
+      this.btnQuality = el('button', {
+        class: 'ctrl-btn',
+        'data-ctl': 'quality',
+        html: '<span class="ico">HD</span><span class="label">清晰度</span>',
+      });
+      this.btnSource = el('button', {
+        class: 'ctrl-btn',
+        'data-ctl': 'source',
+        html: '<span class="ico">⇄</span><span class="label">线路</span>',
+      });
+      this.btnSpeed = el('button', {
+        class: 'ctrl-btn',
+        'data-ctl': 'speed',
+        html: '<span class="ico">1×</span><span class="label">倍速</span>',
+      });
       this.btnDm = el('button', { class: 'ctrl-btn on', 'data-ctl': 'danmaku', html: ICON.danmaku + '<span class="label">弹幕</span>' });
       this.btnFull = el('button', { class: 'ctrl-btn', 'data-ctl': 'fullscreen', 'aria-label': '全屏', html: ICON.full });
       row.appendChild(this.btnSource);
@@ -451,7 +465,6 @@
       row.appendChild(this.btnDm);
       row.appendChild(this.btnFull);
       c.appendChild(row);
-
       // 菜单
       this.menuSource = el('div', { class: 'menu', 'data-menu': 'source' });
       this.menuQuality = el('div', { class: 'menu', 'data-menu': 'quality' });
@@ -683,7 +696,9 @@
     syncProgress() {
       const v = this.video;
       if (this.mode === 'live') {
-        this.timeEl.textContent = '直播中' + (this.opts.viewersText ? ' · ' + this.opts.viewersText : '');
+        // 观看人数单独包一层 span：窄屏用 CSS 隐藏，控制条才不会被撑破
+        this.timeEl.innerHTML =
+          '直播中' + (this.opts.viewersText ? ' <span class="vcount">· ' + this.opts.viewersText + '</span>' : '');
         return;
       }
       if (!isFinite(v.duration) || v.duration <= 0) return;
@@ -768,6 +783,12 @@
       this.renderQualityMenu();
       const label = this.btnQuality.querySelector('.label');
       if (label) label.textContent = this.quality || '清晰度';
+      // 移动端看不到文字，图标要能反映当前档位
+      const ico = this.btnQuality.querySelector('.ico');
+      if (ico) {
+        const m = String(this.quality || '').match(/(原画|2K|1080P|720P|480P|360P|超清|高清|标清)/);
+        ico.textContent = m ? m[1] : 'HD';
+      }
     }
 
     renderQualityMenu() {
@@ -805,6 +826,9 @@
       this.video.playbackRate = sp;
       const label = this.btnSpeed.querySelector('.label');
       if (label) label.textContent = sp === 1 ? '倍速' : sp + '×';
+      // 移动端看不到文字，图标要显示当前倍速
+      const ico = this.btnSpeed.querySelector('.ico');
+      if (ico) ico.textContent = (sp === 1 ? '1×' : sp + '×');
       this.renderSpeedMenu();
     }
 
