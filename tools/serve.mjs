@@ -1,4 +1,12 @@
-/* 本地静态服务器：node tools/serve.mjs [port] */
+/* 本地静态服务器：node tools/serve.mjs [port]
+ *
+ * ⚠️ 这个脚本会一直挂到被 Ctrl+C / 终止 —— 它是给人手动开的，不是给自动化用的。
+ *    自动化脚本（verify / probe-*）请用 tools/static-server.mjs 里��
+ *    startStaticServer()，随脚本起、随脚本关。
+ *    不要用后台任务跑这个脚本：后台任务等不到自然结束，
+ *    运行时只能等上限把它回收，然后系统会把它报成「任务失败」并推送一条
+ *    与用户无关的通知 —— 那纯属自己制造的噪音。
+ */
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';

@@ -7,12 +7,20 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolvePlaywright } from './resolve-playwright.mjs';
+import { startStaticServer } from './static-server.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const OUT = path.join(ROOT, 'data', 'ui-probe');
 fs.mkdirSync(OUT, { recursive: true });
-const BASE = process.argv[2] || 'http://127.0.0.1:8123';
+
+// 临时服务器随脚本起、随脚本关（不用后台常驻任务）
+let server = null;
+let BASE = process.argv[2];
+if (!BASE) {
+  server = await startStaticServer(path.join(ROOT, 'site'));
+  BASE = server.url;
+}
 
 const { pw } = resolvePlaywright();
 const browser = await pw.chromium.launch({
@@ -56,3 +64,4 @@ const st = await page.evaluate(() => {
 console.log(JSON.stringify(st, null, 1));
 await page.screenshot({ path: path.join(OUT, 'expired-live.png') });
 await browser.close();
+if (server) await server.close();

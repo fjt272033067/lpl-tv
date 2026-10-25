@@ -134,9 +134,11 @@ const biliEntry = await page.evaluate(() => {
   return { text: btn.textContent.trim(), found: true };
 });
 console.log('   B站入口: ' + JSON.stringify(biliEntry));
+// 文案有两种形态：有直播时是「在新标签打开B站直播间看实时弹幕」，
+// 休赛期时是提示条上的「打开B站直播间」按钮 —— 都算提供了入口。
 check(
   '直播页提供 B 站直播间入口（新标签打开）',
-  biliEntry.found && /新标签/.test(biliEntry.text || ''),
+  biliEntry.found && /新标签|打开/.test(biliEntry.text || ''),
   biliEntry.text || biliEntry.err || ''
 );
 
@@ -163,6 +165,18 @@ check(
 );
 const distinctLines = new Set((lines.items || []).map((t) => t.replace(/^[✓\s]*/, '').split('·')[0].trim())).size;
 check('各线路文案互不相同', distinctLines >= Math.min(3, (lines.items || []).length), distinctLines + ' 种');
+
+// 休赛期（没有赛事在播）通知条应如实标注无信号，而不是继续显示「正在直播」
+const stripState = await page.evaluate(() => ({
+  label: ((document.querySelector('.live-strip .strip-label') || {}).textContent || '').trim(),
+  items: document.querySelectorAll('.live-strip .strip-item').length,
+}));
+console.log('   通知条: ' + JSON.stringify(stripState));
+check(
+  '通知条状态如实（有直播才显示「正在直播」）',
+  stripState.items > 0 ? /正在直播/.test(stripState.label) : /暂无直播|无信号/.test(stripState.label),
+  stripState.label + ' items=' + stripState.items
+);
 
 // 视觉/体验判据
 const visual = await page.evaluate(() => {

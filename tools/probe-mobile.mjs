@@ -1,17 +1,28 @@
 /* =====================================================================
  * probe-mobile.mjs — 手机视口实拍三个页面，检查布局是否真的不挤
  * 用法： node tools/probe-mobile.mjs [baseUrl]
+ *   不传参数 → 自动起一个临时静态服务器（用完即关），探测本地构建产物
  * ===================================================================== */
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolvePlaywright } from './resolve-playwright.mjs';
+import { startStaticServer } from './static-server.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const OUT = path.join(ROOT, 'data', 'ui-probe');
 fs.mkdirSync(OUT, { recursive: true });
-const BASE = process.argv[2] || 'http://127.0.0.1:8123';
+
+// 临时服务器随脚本起、随脚本关 —— 不用后台常驻任务（常驻任务只会等到超时被回收，
+// 然后变成一条与用户无关的「任务失败」通知）
+let server = null;
+let BASE = process.argv[2];
+if (!BASE) {
+  server = await startStaticServer(path.join(ROOT, 'site'));
+  BASE = server.url;
+}
+console.log('探测目标: ' + BASE);
 
 const { pw } = resolvePlaywright();
 const browser = await pw.chromium.launch({
@@ -73,4 +84,5 @@ for (const [name, hash, wait] of [
   await page.screenshot({ path: path.join(OUT, name + '-full.png'), fullPage: true });
 }
 await browser.close();
+if (server) await server.close();
 console.log('\n截图目录: ' + OUT);

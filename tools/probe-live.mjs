@@ -6,6 +6,7 @@
  *   - 无信号看门狗是否触发
  *   - console 错误
  * 用法： node tools/probe-live.mjs [baseUrl]
+ *   不传参数 → 探测线上站点；传 http://127.0.0.1:xxxx → 探测本地
  * ===================================================================== */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -14,7 +15,7 @@ import { resolvePlaywright } from './resolve-playwright.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const BASE = process.argv[2] || 'https://sbf5ebf7vt81f.space.mcode.cn';
+const BASE = process.argv[2] || 'https://4kf9kfxujfhg2.space.mcode.cn';
 
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const OUT = path.join(ROOT, 'data', 'ui-probe');

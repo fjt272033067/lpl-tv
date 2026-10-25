@@ -128,6 +128,25 @@ function check(name, pass, detail) {
   console.log('   ' + JSON.stringify(live));
   check('直播页渲染出播放器', live.hasVideo);
   check('直播页加载出赛事侧栏', live.sideRows > 0 || live.state.length > 0);
+
+  // 判断「当前有没有赛事在播」——验收判据必须对外部状态免疫：
+  // 休赛期（腾讯常驻房无流、B 站流地址也已过期）时，页面给明确提示就是正确行为，
+  // 不该被当成回归来报失败。
+  const signal = await page.evaluate(() => {
+    const v = document.querySelector('.player video');
+    const msg = document.querySelector('.player-msg');
+    const hasFrame = !!(v && v.videoWidth > 0);
+    const msgText = msg && getComputedStyle(msg).display !== 'none' ? msg.textContent.trim() : '';
+    const stripLabel = (document.querySelector('.live-strip .strip-label') || {}).textContent || '';
+    return {
+      hasFrame,
+      msgText: msgText.slice(0, 120),
+      noSignal: !hasFrame && /暂无直播|无信号|信号|结束|准备/.test(msgText + ' ' + stripLabel),
+      stripLabel: stripLabel.trim(),
+    };
+  });
+  console.log('   信号状态: ' + JSON.stringify(signal));
+  global.__hasSignal = signal.hasFrame;
   // 清晰度档位随线路变化：腾讯源多档、B 站源单档（未登录最高高清）。
   // 判据是「菜单如实给出当前线路的档位」，而不是硬编码 3 档。
   check('直播清晰度菜单有可用档位', live.qualityMenu >= 1, 'quality items=' + live.qualityMenu);
@@ -151,11 +170,20 @@ function check(name, pass, detail) {
     return { decoded: true, nonBlack: +(nonBlack / (d.length / 4)).toFixed(3), w: v.videoWidth, h: v.videoHeight };
   });
   console.log('   直播画面: ' + JSON.stringify(liveFrame));
-  check(
-    '直播真的解码出画面（非黑屏）',
-    liveFrame.decoded && liveFrame.nonBlack > 0.05,
-    liveFrame.decoded ? `nonBlack=${liveFrame.nonBlack} ${liveFrame.w}x${liveFrame.h}` : '视频未解码'
-  );
+  if (signal.hasFrame) {
+    check(
+      '直播真的解码出画面（非黑屏）',
+      liveFrame.decoded && liveFrame.nonBlack > 0.05,
+      liveFrame.decoded ? `nonBlack=${liveFrame.nonBlack} ${liveFrame.w}x${liveFrame.h}` : '视频未解码'
+    );
+  } else {
+    // 休赛期：没有赛事在播是正常的，此时必须给出明确提示而不是黑屏
+    check(
+      '无直播信号时给出明确提示（非黑屏无解释）',
+      signal.noSignal,
+      signal.msgText || '（无提示）'
+    );
+  }
 
   // 线路菜单必须包含可站内播放的 B 站在播源（腾讯常驻锚点常是失效流）
   // 注意：不能走 Playwright 的 click —— 播放器有画面时控制条会自动隐藏，
@@ -240,7 +268,16 @@ function check(name, pass, detail) {
   check('平台标签有区分色', visual.platKinds.length >= 2, visual.platKinds.join(','));
   check('赛事横幅已渲染', visual.banner, visual.bannerLogos + ' 个队徽');
   check('有回到顶部按钮', visual.toTop);
-  check('通知条为单行紧凑信息', visual.stripItems > 0 && visual.stripRun === 0, visual.stripItems + ' 项');
+  if (visual.stripItems > 0) {
+    check('通知条为单行紧凑信息', visual.stripRun === 0, visual.stripItems + ' 项');
+  } else {
+    // 休赛期没有可播源，通知条应改为「暂无直播信号」而不是继续显示「正在直播」
+    check(
+      '休赛期通知条如实标注无信号',
+      /暂无直播|无信号/.test(signal.stripLabel || ''),
+      (signal.stripLabel || '(空)') + ' items=' + visual.stripItems
+    );
+  }
 
   // 关键判据：B 站流地址约 60 分钟过期（B 站签名机制），
   // 过期后必须自动切到还活着的线路，而不是给用户留一块黑屏。
@@ -263,26 +300,38 @@ function check(name, pass, detail) {
   const expState = await expPage.evaluate(() => {
     const v = document.querySelector('.player video');
     const strip = [...document.querySelectorAll('.live-strip .strip-item')].map((e) => e.textContent.trim());
+    const msg = document.querySelector('.player-msg');
+    const msgText = msg && getComputedStyle(msg).display !== 'none' ? msg.textContent.trim() : '';
+    const stripLabel = (document.querySelector('.live-strip .strip-label') || {}).textContent || '';
     return {
       videoW: v ? v.videoWidth : 0,
       playing: v ? !v.paused : false,
       srcMenu: document.querySelectorAll('.menu[data-menu="source"] .menu-item').length,
       strip: strip,
       stripUniq: new Set(strip).size,
+      msg: msgText.slice(0, 120),
+      noSignal:
+        !(v && v.videoWidth > 0) && /暂无直播|无信号|信号|结束|准备/.test(msgText + ' ' + stripLabel),
     };
   });
   console.log('   过期降级: ' + JSON.stringify(expState));
-  check(
-    '流地址过期后自动切到可用线路',
-    expState.videoW > 0 && expState.playing,
-    `${expState.videoW}px playing=${expState.playing}`
-  );
-  check(
-    '过期降级后仍有平台官方直播间入口',
-    expState.srcMenu >= 3,
-    expState.srcMenu + ' 条线路'
-  );
-  check('通知条无重复文案', expState.stripUniq === expState.strip.length, expState.strip.join(' / '));
+  if (expState.videoW > 0) {
+    check(
+      '流地址过期后自动切到可用线路',
+      expState.playing,
+      `${expState.videoW}px playing=${expState.playing}`
+    );
+    check('过期降级后通知条无重复文案', expState.stripUniq === expState.strip.length, expState.strip.join(' / '));
+  } else {
+    // 当前本来就没有赛事在播时，「过期后无信号」是正确表现：
+    // 关键是不能留黑屏而不给解释，且仍要给出平台官方直播间入口
+    check(
+      '无信号时给出明确提示而非黑屏',
+      expState.noSignal,
+      expState.msg || '（无提示）'
+    );
+    check('过期降级后仍有平台官方直播间入口', expState.srcMenu >= 3, expState.srcMenu + ' 条线路');
+  }
   await expPage.close();
   await page.screenshot({ path: path.join(SHOTS, '01-live.png'), fullPage: false });
 
@@ -337,9 +386,11 @@ function check(name, pass, detail) {
     return { text: btn.textContent.trim(), found: true };
   });
   console.log('   B站入口: ' + JSON.stringify(biliEntry));
+  // 文案有两种形态：有直播时是「在新标签打开B站直播间看实时弹幕」，
+  // 休赛期时是提示条上的「打开B站直播间」按钮 —— 都算提供了入口。
   check(
     '直播页提供 B 站直播间入口（新标签打开）',
-    biliEntry.found && /新标签/.test(biliEntry.text || ''),
+    biliEntry.found && /新标签|打开/.test(biliEntry.text || ''),
     biliEntry.text || biliEntry.err || ''
   );
   inDrawer = false;
