@@ -763,6 +763,7 @@ async function main() {
   //     流地址只能构建期拿：api.live.bilibili.com 的 playUrl 无 ACAO 头，
   //     运行时 fetch 必被 CORS 拦，JSONP 又会被 Chrome ORB 拦（application/json）。
   console.log('[4/4] 输出数据文件…');
+  const COVER_DIR = path.join(DATA, 'cover');
   const liveList = [];
   // B 站 LPL 官方赛事直播间（搜索不一定能搜到，固定兜底）
   const KNOWN_ROOM_IDS = BILI_ROOM_IDS;
@@ -787,8 +788,14 @@ async function main() {
       title: info.title || t,
       live: info.live,
       online: info.online || 0,
+      attention: info.attention || 0,
       uname: info.uname || '',
       area: info.area || '',
+      // 封面帧由 capture-covers.mjs 抓；文件存在才写，否则前端显示平台占位
+      cover: (() => {
+        const f = path.join(COVER_DIR, `${info.roomid}.jpg`);
+        return fs.existsSync(f) && fs.statSync(f).size > 2000 ? 'data/cover/' + info.roomid + '.jpg' : '';
+      })(),
       stream: info.stream || null,
       biliUrl: info.biliUrl,
     });

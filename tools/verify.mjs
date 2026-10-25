@@ -310,6 +310,7 @@ function check(name, pass, detail) {
       strip: strip,
       stripUniq: new Set(strip).size,
       msg: msgText.slice(0, 120),
+      fallbackBtns: document.querySelectorAll('.live-fallback .lf-btn').length,
       noSignal:
         !(v && v.videoWidth > 0) && /暂无直播|无信号|信号|结束|准备/.test(msgText + ' ' + stripLabel),
     };
@@ -331,6 +332,12 @@ function check(name, pass, detail) {
       expState.msg || '（无提示）'
     );
     check('过期降级后仍有平台官方直播间入口', expState.srcMenu >= 3, expState.srcMenu + ' 条线路');
+    // 兜底大按钮：站内没信号时，官方直播间要直接摆在页面上（别让用户翻菜单）
+    check(
+      '无信号时页面直接给出官方直播间按钮组',
+      expState.fallbackBtns >= 3,
+      expState.fallbackBtns + ' 个按钮'
+    );
   }
   await expPage.close();
   await page.screenshot({ path: path.join(SHOTS, '01-live.png'), fullPage: false });
@@ -679,6 +686,49 @@ function check(name, pass, detail) {
   await page.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2500);
   await page.screenshot({ path: path.join(SHOTS, '07-schedule.png') });
+
+  // 赛程的「实时比分覆盖」：
+  // 腾讯 LiveBMatchList 是跨域可读的 var 文件，赛事进行时会给出当前这场的对阵与比分。
+  // 这里注入一条假的实时数据，验证赛程页确实会用它覆盖构建期快照。
+  const livePage = await ctx.newPage();
+  await livePage.route('**/LOL_MATCH2_LIVE_BMATCH_LIST.js*', async (route) => {
+    const body = [
+      'var LiveBMatchList={"status":"0","lastUpTime":"2026-10-25 05:00:00","msg":{"246":[{',
+      '"GameId":"246","GameName":"2026全球总决赛","bMatchId":"13633","bMatchName":"TES vs AL",',
+      '"TeamNameA":"TES","TeamShortNameA":"TES","ScoreA":"1","TeamNameB":"AL","TeamShortNameB":"AL",',
+      '"ScoreB":"1","MatchDate":"2026-10-25 01:00:00","GameMode":"1","GameProcName":"第二天",',
+      '"Video3":"764502578","is_anchor":"1"}]}};',
+    ].join('');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/javascript; charset=utf-8',
+      body,
+    });
+  });
+  await livePage.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
+  await livePage.waitForTimeout(4500);
+  const liveOverlay = await livePage.evaluate(() => {
+    const rows = [...document.querySelectorAll('.bracket-row')];
+    const live = rows.filter((r) => r.classList.contains('is-live'));
+    const head = [...document.querySelectorAll('.section-head .badge-live')].map((e) => e.textContent.trim());
+    return {
+      liveRows: live.length,
+      scores: live.map((r) => {
+        const sides = [...r.querySelectorAll('.bside')].map((s) => s.textContent.trim());
+        const sc = (r.querySelector('.bscore') || {}).textContent || '';
+        return sides.join(' ') + ' ' + sc;
+      }),
+      head,
+    };
+  });
+  console.log('   实时覆盖: ' + JSON.stringify(liveOverlay));
+  check(
+    '赛程用腾讯实时数据覆盖比分（非构建期快照）',
+    liveOverlay.liveRows >= 1,
+    liveOverlay.liveRows + ' 行高亮 ' + liveOverlay.scores.join(' | ')
+  );
+  check('赛程页标注实时场次数', liveOverlay.head.length >= 1, liveOverlay.head.join(' '));
+  await livePage.close();
 
   /* ---------------- 移动端 ---------------- */
   console.log('\n[移动端]');

@@ -1705,7 +1705,8 @@
         cover: (txCovers && txCovers[String(l.anchorId)]) || '',
         live: l,
         streams: l.streams,
-        playable: true,
+        // 腾讯常驻房没信号时不当作可播，否则主线路会选中它、永远进不了兜底分支
+        playable: healthy,
         healthy,
         viewers: l.viewers || 0,
       });
@@ -1751,12 +1752,12 @@
     // 未开播的腾讯源排到最后（用户反馈：腾讯线路连画面都没有）
     sources.sort((a, b) => (a.healthy === false ? 1 : 0) - (b.healthy === false ? 1 : 0));
 
-    // 主线路：优先码率最高的 B 站赛事源；腾讯真在播时也可用；再次是其它
+    // 主线路：优先「腾讯真在播」（1080P 三档），其次未过期的 B 站房间。
+    // 都没有 → main 为 null，走兜底分支（页面直接摆出平台官方直播间按钮）。
     const playable = sources.filter((s) => s.playable);
     const main =
       playable.find((s) => s.kind === 'tx' && s.healthy) ||
       playable.find((s) => s.kind === 'bili') ||
-      playable[0] ||
       null;
 
     view.innerHTML = '';
@@ -2053,16 +2054,37 @@
         applySource(s);
       };
     } else {
-      // 站内没有可用信号时，线路菜单依然要给出「平台官方直播间」入口
-      // （那些是永远实时的），不能只剩一句「没有可用直播源」
+      // 站内没有可用信号时（休赛期或地址已过期），不要让用户自己去菜单里翻：
+      // 直接在播放器区摆出各平台官方直播间的大按钮（那些是永远实时的，
+      // 清晰度/音量由平台自己的播放器提供）。
       p.showMsgAction(
-        '当前没有可用的站内直播信号（赛事休赛或地址已过期）。可切到斗鱼 / 虎牙 / B 站官方直播间观看。',
+        '当前没有可用的站内直播信号（赛事休赛或地址已过期）。下面是各平台官方直播间，清晰度与音量可在平台播放器里调整。',
         '打开斗鱼 LPL 官方直播间',
         () => {
           const ext = sources.find((x) => x.kind === 'ext');
           if (ext) window.open(ext.external, '_blank', 'noopener');
         }
       );
+      const fallback = el('div', { class: 'live-fallback' });
+      fallback.appendChild(el('div', { class: 'lf-title', text: '去这些直播间看（永远实时）' }));
+      const grid = el('div', { class: 'lf-grid' });
+      (externalRooms || []).forEach((r) => {
+        grid.appendChild(
+          el('button', {
+            class: 'lf-btn ' + platClass(r.platform),
+            onclick: () => {
+              const w = window.open(r.url, '_blank', 'noopener');
+              if (!w) toast('浏览器拦截了新标签，请允许弹窗后重试');
+            },
+          }, [
+            el('span', { class: 'lf-plat', text: r.platform }),
+            el('span', { class: 'lf-name', text: r.name }),
+            el('span', { class: 'lf-note', text: r.note || '' }),
+          ])
+        );
+      });
+      fallback.appendChild(grid);
+      left.appendChild(fallback);
       if (sources.length) {
         p.setSources(
           sources.map((s) => ({
@@ -2725,6 +2747,49 @@
     return m ? m[1].padStart(2, '0') + ':' + m[2] : '';
   }
 
+  /**
+   * 用腾讯的实时直播列表覆盖赛程里的比分与状态。
+   *
+   * 为什么需要它：完整的赛程快照（含已结束比赛的比分）来自腾讯的
+   * BMATCH_LIST.json —— 那是裸 JSON 且没有 CORS 头，浏览器读不到，
+   * 只能构建期抓。而 `LOL_MATCH2_LIVE_BMATCH_LIST.js` 是
+   * `var LiveBMatchList = {...}` 形式，可以跨域 <script> 加载，
+   * 赛事进行时会给出**当前这场的对阵与实时比分**。
+   * 所以它能保证「正在打的那场」比分是实时的，而不是构建期快照。
+   */
+  function overlayLiveMatches(list, liveMap) {
+    const flat = [];
+    Object.keys(liveMap || {}).forEach((k) => {
+      const v = liveMap[k];
+      if (Array.isArray(v)) v.forEach((x) => flat.push(x));
+    });
+    if (!flat.length) return 0;
+    const norm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    let n = 0;
+    list.forEach((m) => {
+      const hit = flat.find((x) => {
+        const xd = String(x.MatchDate || '').slice(0, 10);
+        const md = dayKeyOf(m.date);
+        if (xd && md && xd !== md) return false;
+        const a = norm(x.TeamNameA || x.TeamShortNameA);
+        const b = norm(x.TeamNameB || x.TeamShortNameB);
+        const ma = norm(m.teamA);
+        const mb = norm(m.teamB);
+        if (!a || !b || !ma || !mb) return false;
+        const hitA = a === ma || a.includes(ma) || ma.includes(a);
+        const hitB = b === mb || b.includes(mb) || mb.includes(b);
+        return hitA && hitB;
+      });
+      if (!hit) return;
+      m.live = true;
+      m.score = (hit.ScoreA != null ? hit.ScoreA : 0) + ' : ' + (hit.ScoreB != null ? hit.ScoreB : 0);
+      if (hit.MatchDate) m.date = hit.MatchDate;
+      if (hit.GameProcName) m.phase = hit.GameProcName;
+      n++;
+    });
+    return n;
+  }
+
   async function renderSchedule() {
     setNav('schedule');
     loading('正在加载赛程…');
@@ -2738,6 +2803,15 @@
       return;
     }
     await ensureTeamLogos();
+
+    // 实时覆盖：正在进行的比赛用腾讯实时数据刷新比分（跨域可读，零构建期依赖）
+    let liveOverlaid = 0;
+    try {
+      const lbm = await loadGlobalScript(LIVE_BMATCH_JS, 'LiveBMatchList').catch(() => null);
+      if (lbm && lbm.msg) liveOverlaid = overlayLiveMatches(list, lbm.msg);
+    } catch (e) {
+      /* 覆盖失败就用构建期快照 */
+    }
 
     const filtered = list.filter((m) => {
       if (schedState.game && m.game !== schedState.game) return false;
@@ -2755,16 +2829,17 @@
     games.sort((a, b) => ((evMaxDate.get(b) || '') > (evMaxDate.get(a) || '') ? 1 : -1));
 
     view.innerHTML = '';
-    view.appendChild(
-      el('div', { class: 'section-head' }, [
-        el('h2', { text: '赛事赛程' }),
-        el('span', { text: '共 ' + list.length + ' 场 · 对阵图对齐腾讯 LPL 官方「赛事进度」' }),
-        el('span', {
-          class: 'updated-at',
-          text: '数据更新于 ' + (cat.updatedAt || '—').replace('T', ' ').slice(0, 16),
-        }),
-      ])
-    );
+    const head = el('div', { class: 'section-head' }, [
+      el('h2', { text: '赛事赛程' }),
+      el('span', { text: '共 ' + list.length + ' 场 · 对阵图对齐腾讯 LPL 官方「赛事进度」' }),
+      liveOverlaid
+        ? el('span', { class: 'badge badge-live', text: '● ' + liveOverlaid + ' 场比分实时' })
+        : el('span', {
+            class: 'updated-at',
+            text: '数据更新于 ' + (cat.updatedAt || '—').replace('T', ' ').slice(0, 16),
+          }),
+    ]);
+    view.appendChild(head);
 
     // 赛事选择（官方那种下拉）
     const picker = el('div', { class: 'sched-picker' });
@@ -2826,11 +2901,13 @@
           id: m.id || '',
           bvid: m.bvid || '',
           biliPage: m.biliPage || 0,
+          live: !!m.live,
           games: 0,
         });
       }
       const s2 = seriesMap.get(key);
       s2.games++;
+      if (m.live) s2.live = true;
       const cur = String(s2.score || '0:0').split(':').map(Number);
       const alt = String(m.score || '0:0').split(':').map(Number);
       if ((alt[0] || 0) + (alt[1] || 0) > (cur[0] || 0) + (cur[1] || 0)) s2.score = m.score;
@@ -2894,7 +2971,10 @@
           const aWin = Number(sa) > Number(sb);
           const bWin = Number(sb) > Number(sa);
           const done2 = !!s.score && s.score !== '0:0';
-          const li = el('li', { class: 'bracket-row' + (done2 ? ' done' : ' todo') });
+          const li = el('li', {
+            class: 'bracket-row' + (done2 ? ' done' : ' todo') + (s.live ? ' is-live' : ''),
+          });
+          if (s.live) li.title = '正在直播（比分实时更新）';
           const mkSide = (name, id, score, win) => {
             const side = el('span', { class: 'bside' + (win ? ' win' : '') });
             const info = teamByTeamId(id, name);

@@ -951,3 +951,64 @@ td .status { font-size: 11.5px; }
     .filters select, .filters input { width: 100%; min-width: 0; }
     .filters .count { grid-column: 1 / -1; margin-left: 0; }
 }
+/* ============================================================
+   赛程：正在直播的行（比分来自腾讯实时数据，非构建期快照）
+   ============================================================ */
+.bracket-row.is-live {
+    background: linear-gradient(90deg, rgba(255, 61, 97, .16), rgba(255, 61, 97, .04));
+    box-shadow: inset 2px 0 0 var(--live);
+    border-radius: 6px;
+}
+.bracket-row.is-live .bscore { color: var(--live); }
+.bracket-row.is-live::after {
+    content: '● 直播中';
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--live);
+    letter-spacing: .3px;
+}
+.section-head .badge-live { white-space: nowrap; }
+/* ============================================================
+   站内无信号时的兜底：把平台官方直播间做成显眼的大按钮
+   （那些永远实时，清晰度/音量由平台播放器提供）
+   ============================================================ */
+.live-fallback {
+    margin-top: 14px;
+    padding: 16px 18px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+.live-fallback .lf-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+}
+.live-fallback .lf-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 10px;
+}
+.live-fallback .lf-btn {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    align-items: flex-start;
+    text-align: left;
+    padding: 11px 13px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-2);
+    cursor: pointer;
+    transition: .14s;
+}
+.live-fallback .lf-btn:hover { border-color: currentColor; transform: translateY(-1px); }
+.live-fallback .lf-plat { font-size: 11px; font-weight: 800; letter-spacing: .3px; }
+.live-fallback .lf-name { font-size: 13.5px; font-weight: 700; color: var(--text); }
+.live-fallback .lf-note { font-size: 11.5px; color: var(--text-faint); }
+@media (max-width: 720px) {
+    .live-fallback { padding: 13px 14px; }
+    .live-fallback .lf-grid { grid-template-columns: 1fr 1fr; }
+    .live-fallback .lf-name { font-size: 12.5px; }
+}
