@@ -1,6 +1,7 @@
 /* 线上验收：直接跑已部署的公网地址 */
 import { resolvePlaywright } from './resolve-playwright.mjs';
 import { decodePng, frameStats } from './pngdiff.mjs';
+import { upstreamKeys, localKeys, todayKey } from './schedule-keys.mjs';
 
 const { chromium } = resolvePlaywright().pw;
 
@@ -166,6 +167,31 @@ check(
 const distinctLines = new Set((lines.items || []).map((t) => t.replace(/^[✓\s]*/, '').split('·')[0].trim())).size;
 check('各线路文案互不相同', distinctLines >= Math.min(3, (lines.items || []).length), distinctLines + ' 种');
 
+// B 站线路：按实际清晰度排序 + 不含别的游戏分区 + 提供官方原画出口
+const biliLines = await page.evaluate(() => {
+  const cards = [...document.querySelectorAll('.card[data-kind="bili"]')];
+  return cards.map((c) => ({
+    res: (c.querySelector('.card-hd') || {}).textContent || '',
+    sub: (c.querySelector('.card-meta span') || {}).textContent || '',
+    title: (c.querySelector('.card-title') || {}).textContent || '',
+    jump: !!c.querySelector('.card-jump'),
+  }));
+});
+console.log('   B站线路: ' + JSON.stringify(biliLines));
+const resRank = { 原画: 5, '2K': 4, '1080P': 3, '720P': 2, '480P': 1, '360P': 0 };
+const ranks = biliLines.map((l) => resRank[l.res] ?? -1).filter((r) => r >= 0);
+check(
+  'B 站线路按实际清晰度从高到低排列',
+  ranks.length <= 1 || ranks.every((r, i) => i === 0 || ranks[i - 1] >= r),
+  ranks.join('>')
+);
+check(
+  'B 站线路不含其它游戏分区（金铲铲等）',
+  biliLines.every((l) => !/金铲铲|云顶|无畏契约|王者/.test(l.title + l.sub)),
+  biliLines.map((l) => l.title).join(' | ')
+);
+check('B 站线路提供官方原画出口', biliLines.length === 0 || biliLines.every((l) => l.jump), biliLines.length + ' 条');
+
 // 休赛期（没有赛事在播）通知条应如实标注无信号，而不是继续显示「正在直播」
 const stripState = await page.evaluate(() => ({
   label: ((document.querySelector('.live-strip .strip-label') || {}).textContent || '').trim(),
@@ -269,6 +295,13 @@ const vod = await page.evaluate(async () => {
 });
 console.log('   ' + JSON.stringify(vod));
 check('录像库有卡片', vod.cards > 0, 'cards=' + vod.cards);
+const vodSrc = await page.evaluate(() => ({
+  tags: document.querySelectorAll('.src-tag').length,
+  biliTags: document.querySelectorAll('.src-tag.bili').length,
+  txTags: document.querySelectorAll('.src-tag.tx').length,
+}));
+console.log('   来源标注: ' + JSON.stringify(vodSrc));
+check('录像卡片标注来源（腾讯点播 / B站同源）', vodSrc.txTags > 0 && vodSrc.biliTags > 0, JSON.stringify(vodSrc));
 check('官方最新内容已并入主列表（非独立板块）', vod.officialBadges > 0, '官方标记=' + vod.officialBadges);
 check(
   '主列表比烘焙目录更新（实时生效）',
@@ -326,6 +359,11 @@ console.log('   ' + JSON.stringify(w));
 check('录像可播放（720P）', w.w === 1280 && w.h === 720, w.w + 'x' + w.h);
 check('倍速菜单 8 档', w.speed === 8);
 check('B站弹幕渲染到画面', w.items > 0, 'items=' + w.items + ' ' + JSON.stringify(w.sample));
+const watchAlt = await page.evaluate(() => ({
+  btn: (document.querySelector('.watch-alt button') || {}).textContent || '',
+  note: (document.querySelector('.watch-alt .wa-note') || {}).textContent || '',
+}));
+check('播放页提供备用源出口（B站同源/搜索）', /B站/.test(watchAlt.btn), watchAlt.btn);
 
 console.log('\n[4] 赛程页（官方赛事进度视图）');
 await page.goto(URL + '/#/schedule', { waitUntil: 'domcontentloaded' });
@@ -346,6 +384,18 @@ check('赛程渲染出对阵行', sch.rows > 0, 'rows=' + sch.rows);
 check('对阵行带队伍徽标', sch.logos > 0, 'logos=' + sch.logos);
 check('对阵行带比分', sch.scores > 0, 'scores=' + sch.scores);
 check('赛程有赛事下拉选择', sch.picker);
+
+// 赛程新鲜度：快照时间 + 滞后时长 + 当前赛事信息（运行时直连）
+const schFresh = await page.evaluate(() => ({
+  label: (document.querySelector('.updated-at') || {}).textContent || '',
+  eventMeta: (document.querySelector('.sched-event-meta') || {}).textContent || '',
+  stale: !!document.querySelector('.updated-at.stale'),
+  banner: !!document.querySelector('.sched-stale'),
+}));
+console.log('   赛程新鲜度: ' + JSON.stringify(schFresh));
+check('赛程页显示快照时间与滞后时长', /赛程快照/.test(schFresh.label), schFresh.label);
+check('赛程页显示当前赛事信息（运行时直连）', /全球总决赛|赛事/.test(schFresh.eventMeta), schFresh.eventMeta);
+check('线上赛程快照是新鲜的（无陈旧警示）', !schFresh.banner && !schFresh.stale, schFresh.label);
 
 // 赛程行点击看录播：腾讯源 → 站内播放页；B 站源 → 新标签打开 B 站视频
 const vodRows = await page.evaluate(() => ({
@@ -397,6 +447,60 @@ check(
   biliClick.captured ? biliClick.captured.slice(0, 70) : biliClick.err || '未打开'
 );
 await page.screenshot({ path: 'data/ui-smoke/07-schedule.png' });
+
+// 陈旧快照的防错：把线上的 schedule.json 换成一份旧快照，页面必须提示并把
+// 未开打的对阵标成「待确认」（而不是继续显示可能过时的队名）。
+const stalePage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+await stalePage.route('**/data/schedule.json*', async (route) => {
+  const res = await route.fetch();
+  const body = await res.json();
+  body.updatedAt = new Date(Date.now() - 5 * 86400000).toISOString();
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json; charset=utf-8',
+    body: JSON.stringify(body),
+  });
+});
+await stalePage.goto(URL + '/#/schedule', { waitUntil: 'domcontentloaded' });
+await stalePage.waitForTimeout(5000);
+const stale = await stalePage.evaluate(() => ({
+  banner: !!document.querySelector('.sched-stale'),
+  bannerText: (document.querySelector('.sched-stale') || {}).textContent || '',
+  pending: document.querySelectorAll('.bracket-row.unconfirmed').length,
+  pendingText: (document.querySelector('.bracket-row.unconfirmed .babbr') || {}).textContent || '',
+  link: (document.querySelector('.sched-stale .ss-link') || {}).href || '',
+}));
+console.log('   陈旧快照: ' + JSON.stringify(stale));
+check('赛程快照陈旧时给出明确提示', stale.banner && /滞后|落后/.test(stale.bannerText), stale.bannerText.slice(0, 60));
+check('陈旧快照下未开打对阵标为「待确认」', stale.pending >= 1 && /待确认/.test(stale.pendingText), 'pending=' + stale.pending);
+check('陈旧提示给出官方对阵图出口', /lpl\.qq\.com/.test(stale.link), stale.link);
+await stalePage.close();
+
+// 线上赛程快照 vs 腾讯上游：这是「赛程准不准」最硬的判据
+try {
+  const UA_QQ =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
+  const upRes = await fetch('https://lpl.qq.com/web201612/data/LOL_MATCH2_MATCH_HOMEPAGE_BMATCH_LIST.js', {
+    headers: { 'User-Agent': UA_QQ, Referer: 'https://lpl.qq.com/' },
+  });
+  const up = await upRes.json();
+  const deployed = await (await fetch(URL + '/data/schedule.json')).json();
+  const cutoff = todayKey();
+  const upF = upstreamKeys(up.msg || [], cutoff);
+  const loF = localKeys(deployed.matches || [], cutoff);
+  const missing = [...upF].filter((x) => !loF.has(x));
+  const extra = [...loF].filter((x) => !upF.has(x));
+  const ageH = (Date.now() - Date.parse(deployed.updatedAt || '')) / 3600000;
+  console.log(`   线上快照 vs 上游: 上游 ${upF.size} 场 / 线上 ${loF.size} 场，缺 ${missing.length} 多 ${extra.length}，滞后 ${Math.round(ageH)} 小时`);
+  check(
+    '线上赛程与腾讯上游一致（已淘汰队伍不会残留在后续赛程）',
+    missing.length === 0 && extra.length === 0,
+    `缺 ${missing.length} 多 ${extra.length}`
+  );
+  check('线上赛程快照在 48 小时内', isFinite(ageH) && ageH < 48, '滞后 ' + Math.round(ageH) + ' 小时');
+} catch (e) {
+  check('线上赛程与腾讯上游一致（已淘汰队伍不会残留在后续赛程）', false, '比对失败：' + e.message);
+}
 
 console.log('\n[5] 移动端');
 const mob = await browser.newPage({ viewport: { width: 390, height: 844 } });

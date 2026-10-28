@@ -387,9 +387,35 @@ function titleHasTeam(title, team) {
   return new RegExp('(^|[^A-Z0-9])' + k + '($|[^A-Z0-9])').test(t);
 }
 
+/**
+ * 标题里的年份 / 日期与比赛是否冲突。
+ *
+ * 必须有这道闸：只按队名匹配会把「【2025全球总决赛】10月25日 MKOI vs T1」
+ * 这种 2025 年的录像配给 2026 年的同名对阵 —— 用户点进去看到的是旧年份的比赛。
+ * 规则：
+ *   - 标题里出现年份，且没有任何一个年份等于比赛年份 → 冲突；
+ *   - 标题里出现「M月D日」，且没有一个日期等于比赛日期（同年）→ 冲突。
+ */
+function titleTimeConflict(title, m) {
+  const t = String(title || '');
+  const year = String((m && m.date) || '').slice(0, 4);
+  if (!/^\d{4}$/.test(year)) return false;
+  const years = [...new Set(t.match(/20\d{2}/g) || [])];
+  if (years.length && !years.includes(year)) return true;
+  const md = [...t.matchAll(/(\d{1,2})月(\d{1,2})日/g)].map((x) => [Number(x[1]), Number(x[2])]);
+  if (md.length) {
+    const d = new Date(String(m.date).replace(/-/g, '/'));
+    if (isFinite(d.getTime()) && d.getFullYear() === Number(year)) {
+      const ok = md.some(([mm, dd]) => mm === d.getMonth() + 1 && dd === d.getDate());
+      if (!ok) return true;
+    }
+  }
+  return false;
+}
+
 /** 明显不是「整场比赛录像」的标题（赛后雷达图、锐评、预测、采访…） */
 const BILI_BAD_TITLE =
-  /(雷达图|锐评|赛后数据|赛后分析|集锦|高光|盘点|预测|采访|花絮|表情包|速看|脑洞|切片|杂谈|吐槽|搞笑|挑战|大事记|回顾)/;
+  /(雷达图|锐评|赛后数据|赛后分析|集锦|高光|盘点|预测|前瞻|前瞻片|赛前|采访|花絮|表情包|速看|脑洞|切片|杂谈|吐槽|搞笑|挑战|大事记|回顾|前瞻)/;
 /** 整场比赛录像的时长下限（秒）——短于此的基本都是切片/集锦 */
 const BILI_MIN_DURATION = 25 * 60;
 
@@ -425,14 +451,16 @@ function resetFuturePending(schedule) {
 }
 
 /** 找到该场对战在 B 站视频里的分P页码（赛事录像常按场次分P） */
-function resolveBiliPage(bvid, teamA, teamB) {
+function resolveBiliPage(bvid, teamA, teamB, m) {
   const pages = fetchPages(bvid);
   if (!pages.length) return 1;
-  let idx = pages.findIndex(
+  const usable = m ? pages.filter((p) => !titleTimeConflict(p.part || '', m)) : pages;
+  const pool = usable.length ? usable : pages;
+  let idx = pool.findIndex(
     (p) => titleHasTeam(p.part || '', teamA) && titleHasTeam(p.part || '', teamB)
   );
   if (idx < 0) {
-    idx = pages.findIndex((p) => titleHasTeam(p.part || '', teamA) || titleHasTeam(p.part || '', teamB));
+    idx = pool.findIndex((p) => titleHasTeam(p.part || '', teamA) || titleHasTeam(p.part || '', teamB));
   }
   return idx < 0 ? 1 : idx + 1;
 }
@@ -450,6 +478,7 @@ function matchPending(schedule, pool, candidates) {
     for (const v of pool.values()) {
       if (!titleHasTeam(v.title, m.teamA) || !titleHasTeam(v.title, m.teamB)) continue;
       if (BILI_BAD_TITLE.test(v.title)) continue;
+      if (titleTimeConflict(v.title, m)) continue; // 标题里的年份/日期与这场对不上
       const dur = parseDur(v.duration);
       if (dur < BILI_MIN_DURATION) continue;
       let score = 0;
@@ -459,6 +488,10 @@ function matchPending(schedule, pool, candidates) {
       if (/直播回放|录播|录像|直播录像|完整版/.test(v.title)) score += 2;
       if (dur >= 60 * 60) score += 2;
       else if (dur >= 35 * 60) score += 1;
+      // 标题里带年份且与比赛年份一致 → 优先（能自证是这一届的录像）
+      const my = String(m.date || '').slice(0, 4);
+      const vy = (String(v.title).match(/20\d{2}/) || [])[0];
+      if (vy && vy === my) score += 3;
       // 标题里出现多场对阵 → 是合集视频；不如单场精准（但有分P时同样可用）
       const vsCount = (String(v.title).match(/vs/gi) || []).length;
       score -= Math.min(3, Math.max(0, vsCount - 1));
@@ -470,7 +503,7 @@ function matchPending(schedule, pool, candidates) {
     if (best) {
       m.bvid = best.bvid;
       m.biliTitle = best.title;
-      m.biliPage = resolveBiliPage(best.bvid, m.teamA, m.teamB);
+      m.biliPage = resolveBiliPage(best.bvid, m.teamA, m.teamB, m);
       hits.push(`${m.teamA} vs ${m.teamB} → ${best.bvid} p${m.biliPage} (${best.title.slice(0, 40)})`);
     }
   }
@@ -495,7 +528,11 @@ async function main() {
       const prev = JSON.parse(fs.readFileSync(schedulePath, 'utf8'));
       (prev.matches || []).forEach((m) => {
         if (m.bvid && m.date && m.teamA && m.teamB) {
-          prevBiliMap.set(`${m.date}|${m.teamA}|${m.teamB}`, { bvid: m.bvid, biliPage: m.biliPage || 0 });
+          prevBiliMap.set(`${m.date}|${m.teamA}|${m.teamB}`, {
+            bvid: m.bvid,
+            biliPage: m.biliPage || 0,
+            biliTitle: m.biliTitle || '',
+          });
         }
       });
     }
@@ -529,6 +566,11 @@ async function main() {
     const k = `${m.date}|${m.teamA}|${m.teamB}`;
     const prev = prevBiliMap.get(k);
     if (prev && !m.bvid && !m.published) {
+      // 沿用前复查年份/日期，避免把张冠李戴的旧映射带进新快照
+      if (titleTimeConflict(prev.biliTitle || '', m)) {
+        console.log(`      丢弃年份冲突的赛程映射：${k} ← ${prev.biliTitle}`);
+        return;
+      }
       m.bvid = prev.bvid;
       m.biliPage = prev.biliPage;
     }
@@ -550,7 +592,18 @@ async function main() {
     console.log('      无新比赛，跳过 B 站检索');
   } else {
     // 2a. 广撒网：几个通用关键词 + 分页
-    const broad = ['英雄联盟全球总决赛', 'LPL 比赛', '英雄联盟赛事', '全球总决赛'];
+    // 关键词扩源：官方账号名 / 当前赛季 / 回放 —— 用户的诉求是「录像源更丰富」，
+    // 命中面越大，越容易把同场比赛的官方录像和对应分P找齐（分P才是弹幕的落点）。
+    const broad = [
+      '英雄联盟全球总决赛',
+      'LPL 比赛',
+      '英雄联盟赛事',
+      '全球总决赛',
+      '哔哩哔哩英雄联盟赛事',
+      '英雄联盟 回放',
+      'S16 全球总决赛',
+      'LPL 回放',
+    ];
     for (const kw of broad) {
       for (let pg = 1; pg <= 3; pg++) {
         const sj = biliSearch(kw, pg);
@@ -574,8 +627,15 @@ async function main() {
       if (pairSeen.has(pairKey)) continue;
       pairSeen.add(pairKey);
       if (pool.size > 6000) break;
-      const sj = biliSearch(`${t[0]} ${t[1]}`, 1);
-      extractVideos(sj).forEach((v) => pool.set(v.bvid, v));
+      let sj = biliSearch(`${t[0]} ${t[1]}`, 1);
+      let got = extractVideos(sj);
+      // 队伍名搜不到就换「队伍 + 回放/录像」再搜一次（官方账号常这样命名）
+      if (!got.length) {
+        await sleep(500);
+        sj = biliSearch(`${t[0]} ${t[1]} 回放`, 1);
+        got = extractVideos(sj);
+      }
+      got.forEach((v) => pool.set(v.bvid, v));
       extractLives(sj).forEach((l) => lives.set(String(l.roomid), l));
       await sleep(650);
     }
@@ -608,14 +668,19 @@ async function main() {
     // 已有映射的直接沿用（增量模式的关键：绝大多数比赛无需重新匹配）
     const prev = prevById.get(m.id);
     if (prev && prev.bvid) {
-      m.bvid = prev.bvid;
-      m.biliTitle = prev.biliTitle || prev.biliPart || '';
-      m.cid = prev.cid || null;
-      m.dmCount = prev.dmCount || 0;
-      m.biliPage = prev.biliPage || 1;
-      m.biliPages = prev.biliPages || 1;
-      matched++;
-      continue;
+      // 但沿用前要复查年份/日期：早期版本没有这道闸，可能存着张冠李戴的映射
+      const conflict = titleTimeConflict(prev.biliTitle || prev.biliPart || '', m);
+      if (!conflict) {
+        m.bvid = prev.bvid;
+        m.biliTitle = prev.biliTitle || prev.biliPart || '';
+        m.cid = prev.cid || null;
+        m.dmCount = prev.dmCount || 0;
+        m.biliPage = prev.biliPage || 1;
+        m.biliPages = prev.biliPages || 1;
+        matched++;
+        continue;
+      }
+      console.log(`      丢弃年份冲突的旧映射：${m.title} ← ${prev.biliTitle || prev.biliPart || ''}`);
     }
     const ts = teamsOf(m.title);
     if (!ts.length) continue;
@@ -628,6 +693,8 @@ async function main() {
     let best = null;
     let bestScore = -1;
     for (const c of cands) {
+      if (titleTimeConflict(c.title, m)) continue; // 2025 年的录像不能配给 2026 年的比赛
+      if (BILI_BAD_TITLE.test(c.title)) continue; // 集锦/预测/前瞻不是整场录像
       const ct = normKey(c.title);
       let score = 0;
       // 公共 token 数
@@ -636,6 +703,10 @@ async function main() {
       for (const tk of mTokens) if (cTokens.has(tk)) score += tk.length >= 3 ? 2 : 1;
       if (ct.includes('高光') || ct.includes('集锦')) score -= 2;
       if (ct.includes('二路') || ct.includes('直播')) score -= 3;
+      // 标题里带年份且与比赛年份一致 → 优先（能自证是这一届的录像）
+      const my = String(m.date || '').slice(0, 4);
+      const vy = (c.title.match(/20\d{2}/) || [])[0];
+      if (vy && vy === my) score += 3;
       if (score > bestScore) {
         bestScore = score;
         best = c;

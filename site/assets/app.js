@@ -141,8 +141,8 @@
 
   /** 跨域加载腾讯的静态 JS 数据文件（作为全局变量注入，无需 CORS） */
   const loadedGlobals = new Map();
-  function loadGlobalScript(src, globalName) {
-    if (loadedGlobals.has(src)) return loadedGlobals.get(src);
+  function loadGlobalScript(src, globalName, fresh) {
+    if (!fresh && loadedGlobals.has(src)) return loadedGlobals.get(src);
     const p = new Promise((resolve, reject) => {
       const s = document.createElement('script');
       s.async = true;
@@ -187,6 +187,8 @@
   const LIVE_BMATCH_JS = 'https://lpl.qq.com/web201612/data/LOL_MATCH2_LIVE_BMATCH_LIST.js';
   const LIVING_GAMES_JS = 'https://lpl.qq.com/web201612/data/LOL_NEWMATCH_LIVE_PAGE_LIVING_GAMES.js';
   const TEAM_LIST_JS = 'https://lpl.qq.com/web201612/data/LOL_MATCH2_TEAM_LIST.js';
+  // 腾讯官方「赛事进度」页 —— 快照陈旧时的权威出口
+  const OFFICIAL_SCHEDULE_URL = 'https://lpl.qq.com/web202301/event.html?tabId=schedule&gameId=246';
   // 英雄联盟赛事官方账号的最新内容（var authorid = {...}，可用 <script> 跨域加载，无需 CORS）
   const OFFICIAL_FEED_JS =
     'https://apps.game.qq.com/cmc/zmMcnAuthorContentList?type=1&page=1&num=40&r1=authorid&authorid=288&source=web_pc';
@@ -258,6 +260,106 @@
       officialFeed = [];
     }
     return officialFeed;
+  }
+
+  /* 运行时数据：赛事元信息（赛事名 / 起止日期 / 队徽），var 赋值可跨域加载 */
+  const EVENT_INFO_JS =
+    'https://apps.game.qq.com/lol/match/apis/searchMatchGameInfo.php?r1=gamelist&p1=1';
+  let eventInfoList = null;
+  async function ensureEventInfo() {
+    if (eventInfoList) return eventInfoList;
+    eventInfoList = [];
+    try {
+      const g = await loadGlobalScript(EVENT_INFO_JS, 'gamelist');
+      const arr = (g && g.msg) || [];
+      eventInfoList = arr
+        .filter((x) => x && x.GameId)
+        .map((x) => ({
+          gameId: String(x.GameId),
+          name: x.GameName || '',
+          enName: x.GameEnName || '',
+          start: x.sDate || '',
+          end: x.eDate || '',
+          logo: x.GameLogo ? (x.GameLogo.indexOf('//') === 0 ? 'https:' + x.GameLogo : x.GameLogo) : '',
+        }));
+    } catch (e) {
+      eventInfoList = [];
+    }
+    return eventInfoList;
+  }
+
+  /** 快照时间戳 → 本地 "10-29 04:54" */
+  function fmtSnapshotTime(iso) {
+    if (!iso) return '—';
+    const t = Date.parse(iso);
+    if (!isFinite(t)) return String(iso).replace('T', ' ').slice(0, 16);
+    const d = new Date(t);
+    return (
+      d.getFullYear() +
+      '-' +
+      String(d.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(d.getDate()).padStart(2, '0') +
+      ' ' +
+      String(d.getHours()).padStart(2, '0') +
+      ':' +
+      String(d.getMinutes()).padStart(2, '0')
+    );
+  }
+
+  /** 从赛事元信息里挑出「当前正在进行的那个赛事」 */
+  function pickCurrentEvent(evInfos, list) {
+    if (!evInfos || !evInfos.length) return null;
+    const names = new Set((list || []).map((m) => m.game));
+    const today = new Date();
+    const todayKey =
+      today.getFullYear() +
+      '-' +
+      String(today.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(today.getDate()).padStart(2, '0');
+    // 优先：赛程里出现过的、且日期区间覆盖今天的
+    const inList = evInfos.filter((e) => names.has(e.name));
+    const pool = inList.length ? inList : evInfos;
+    const covering = pool.filter((e) => e.start && e.end && e.start <= todayKey && e.end >= todayKey);
+    if (covering.length) return covering[covering.length - 1];
+    // 其次：结束日期还没到的最后一个
+    const upcoming = pool.filter((e) => !e.end || e.end >= todayKey);
+    return upcoming.length ? upcoming[upcoming.length - 1] : pool[pool.length - 1];
+  }
+
+  /**
+   * 赛程快照新鲜度。
+   *
+   * 为什么需要它：腾讯的全量对阵表（BMATCH_LIST / PROCDATA）都是裸 JSON 且没有
+   * CORS 头，浏览器运行时读不到 —— 只能构建期抓一份快照。所以站内必须如实
+   * 告诉用户这份快照有多新，否则就会出现「已淘汰的队伍还挂在后续赛程里」。
+   *
+   * 判定为「陈旧」的两条依据（任一成立即陈旧）：
+   *   1. 快照比现在老了 24 小时以上；
+   *   2. 快照里有「开打超过 2 小时却仍是 0:0」的比赛 —— 说明这场的结果它根本没见过。
+   */
+  function scheduleFreshness(meta, list) {
+    const iso = (meta && meta.updatedAt) || '';
+    const ts = Date.parse(iso);
+    const ageH = isFinite(ts) ? (Date.now() - ts) / 3600000 : NaN;
+    let missed = 0;
+    const now = Date.now();
+    (list || []).forEach((m) => {
+      if (!m.date) return;
+      const mt = new Date(String(m.date).replace(/-/g, '/')).getTime();
+      if (!isFinite(mt) || mt + 2 * 3600000 < now) return; // 没开打 / 刚开始
+      const sc = String(m.score || '0:0');
+      if (sc === '0:0' || sc === '0 : 0') missed++;
+    });
+    const stale = !isFinite(ageH) || ageH > 24 || missed > 0;
+    let ageLabel = '未知';
+    if (isFinite(ageH)) {
+      if (ageH < 1) ageLabel = Math.max(1, Math.round(ageH * 60)) + ' 分钟前';
+      else if (ageH < 48) ageLabel = Math.round(ageH) + ' 小时前';
+      else ageLabel = Math.round(ageH / 24) + ' 天前';
+    }
+    return { ageH, ageLabel, missed, stale, updatedAt: iso };
   }
 
   /**
@@ -1399,6 +1501,8 @@
   const Repo = {
     catalog: null,
     schedule: null,
+    /** 赛程快照的元信息（快照时间 / 场次数 / 来源），用于展示新鲜度 */
+    scheduleMeta: null,
     async load() {
       if (this.catalog) return this.catalog;
       const res = await fetch('data/catalog.json', { cache: 'no-cache' });
@@ -1407,13 +1511,20 @@
       return this.catalog;
     },
     /** 完整赛程（含未开赛 / 未发布的比赛），用于对阵图 */
-    async loadSchedule() {
-      if (this.schedule) return this.schedule;
+    async loadSchedule(force) {
+      if (this.schedule && !force) return this.schedule;
       try {
-        const res = await fetch('data/schedule.json', { cache: 'no-cache' });
+        // force 时加时间戳绕过 CDN / 浏览器缓存，确保拿到线上最新的一份快照
+        const url = force ? 'data/schedule.json?t=' + Date.now() : 'data/schedule.json';
+        const res = await fetch(url, { cache: 'no-cache' });
         if (res.ok) {
           const j = await res.json();
           this.schedule = j.matches || [];
+          this.scheduleMeta = {
+            updatedAt: j.updatedAt || '',
+            total: j.total || this.schedule.length,
+            source: j.source || '',
+          };
           return this.schedule;
         }
       } catch (e) {
@@ -1421,6 +1532,7 @@
       }
       const cat = await this.load();
       this.schedule = cat.matches || [];
+      this.scheduleMeta = { updatedAt: cat.updatedAt || '', total: this.schedule.length, source: 'catalog' };
       return this.schedule;
     },
   };
@@ -1506,6 +1618,41 @@
     const e = room.stream.expires || 0;
     if (!e) return false;
     return e - Math.floor(Date.now() / 1000) < (marginSec || 90);
+  }
+
+  /** B 站房间的实际授权清晰度（qn：150=480P、250=720P、10000=原画，未登录会被降级） */
+  function biliQn(room) {
+    return (room && room.stream && Number(room.stream.qn)) || 0;
+  }
+
+  /** B 站流的实际码率（从签名 URL 的 suffix 读，形如 ..._2500.m3u8 → 2.5 Mbps） */
+  function biliBitrate(room) {
+    const u = (room && room.stream && (room.stream.url || room.stream.flvUrl)) || '';
+    const m = u.match(/_(\d{3,5})\.(?:m3u8|flv)/);
+    if (!m) return 0;
+    const kbps = Number(m[1]);
+    return kbps > 100 ? Math.round(kbps / 100) / 10 : 0; // Mbps，保留一位小数
+  }
+
+  /** B 站线路的清晰度标签：档位名 + 实际分辨率 + 实际码率（如实展示，不夸大） */
+  function biliQualityLabel(room) {
+    if (!room || !room.stream) return '源未就绪';
+    const res = qnToRes(biliQn(room));
+    const br = biliBitrate(room);
+    const nm = room.stream.qnName || '';
+    return [nm, res, br ? br + ' Mbps' : ''].filter(Boolean).join(' · ');
+  }
+
+  /**
+   * 这个 B 站房间是不是英雄联盟赛事正片。
+   * 之前把「金铲铲之战」分区的房间也当成了赛事线路（用户反馈「其余线路不清晰」，
+   * 其实一半是别的游戏），这里按分区与标题过滤掉。
+   */
+  function isLolEsportsRoom(r) {
+    const t = (r && r.title ? r.title : '') + ' ' + (r && r.area ? r.area : '');
+    if (/金铲铲|云顶|无畏契约|valorant|地下城|DNF|王者荣耀|和平精英|原神|永劫无间/i.test(t)) return false;
+    if (/赛事|英雄联盟|LPL|全球总决赛|世界赛|S1[0-9]|MSI|季中冠军赛/i.test(t)) return true;
+    return false;
   }
 
   /** 下一场比赛（赛程里未来最近、双方队伍已确定的一场） */
@@ -1668,9 +1815,14 @@
     // 线路表：B 站各房间（不同房间 = 不同码率 = 不同清晰度）+ 腾讯官方源 + 其它平台官方直播间
     const sources = [];
     const biliRooms = rooms
-      .filter((r) => r.live)
+      .filter((r) => r.live && isLolEsportsRoom(r))
       .sort((a, b) => {
-        // 赛事分区优先（"游戏赛事" 才是正片，"英雄联盟" 分区多是散户复盘/二路闲聊）
+        // 先看真实清晰度：B 站未登录时每个房间的授权档位不同（480P / 720P…），
+        // 码率高的房间才是真正能看更清楚的线路，房间名里的「4K」并不可信。
+        const qa = biliQn(a);
+        const qb = biliQn(b);
+        if (qa !== qb) return qb - qa;
+        // 其次赛事分区优先（"游戏赛事" 才是正片，"英雄联盟" 分区多是散户复盘/二路闲聊）
         const ea = /赛事/.test(a.area || '') ? 1 : 0;
         const eb = /赛事/.test(b.area || '') ? 1 : 0;
         if (ea !== eb) return eb - ea;
@@ -1683,7 +1835,7 @@
         kind: 'bili',
         // 名称用房间自己的真实标题（不同房间转播不同场次，文案不能一样）
         name: (r.title || 'B站直播间').slice(0, 28),
-        sub: r.roomid + ' · ' + ((r.stream && r.stream.qnName) || '源未就绪'),
+        sub: r.roomid + ' · ' + biliQualityLabel(r),
         platform: '哔哩哔哩',
         cover: r.cover || '',
         room: r,
@@ -1793,7 +1945,7 @@
           meta: [
             s.room.area || '赛事',
             fmtPopularity(s.room.online) + ' 人气值',
-            s.expired ? '流地址已过期' : '站内直连 · ' + (s.room.stream.qnName || '高清'),
+            s.expired ? '流地址已过期' : '站内直连 · ' + biliQualityLabel(s.room),
             !s.expired && leftMin ? '地址约 ' + leftMin + ' 分钟后刷新' : '',
           ]
             .filter(Boolean)
@@ -2185,6 +2337,7 @@
     const mkCard = (s) =>
       el('div', {
         class: 'card' + (s.id === (main && main.id) ? ' on' : ''),
+        'data-kind': s.kind,
         onclick: () => {
           if (s.kind === 'ext') {
             const w = window.open(s.external, '_blank', 'noopener');
@@ -2215,6 +2368,20 @@
             el('span', { text: s.sub || '—' }),
             el('span', { text: s.kind === 'ext' ? '新标签打开' : fmtPopularity(s.viewers) + ' 人气' }),
           ]),
+          // B 站站内直连的清晰度受「未登录」限制（每房间 480P/720P 不等），
+          // 官方播放器在登录态下能给原画/蓝光 —— 所以给每条 B 站线路都留一个官方出口。
+          s.kind === 'bili' && s.room
+            ? el('button', {
+                class: 'card-jump',
+                text: '官方原画 ↗',
+                title: '在新标签打开 B 站官方直播间（登录后可选原画/蓝光）',
+                onclick: (e) => {
+                  e.stopPropagation();
+                  const w = window.open(s.room.biliUrl || 'https://live.bilibili.com/' + s.room.roomid, '_blank', 'noopener');
+                  if (!w) toast('浏览器拦截了新标签，请允许弹窗后重试');
+                },
+              })
+            : null,
         ]),
       ]);
 
@@ -2479,7 +2646,7 @@
     view.innerHTML = '';
     const head = el('div', { class: 'section-head' }, [
       el('h2', { text: '录像库' }),
-      el('span', { text: '官方最新内容为运行时直连（实时）· 比赛回放列表每 30 分钟自动更新' }),
+      el('span', { text: '官方最新内容为运行时直连（实时）· 比赛回放目录随赛程快照更新' }),
       el('span', {
         class: 'updated-at',
         text: '回放快照 ' + (cat.updatedAt || '—').replace('T', ' ').slice(0, 16),
@@ -2577,6 +2744,12 @@
         el('div', { class: 'card-meta' }, [
           el('span', { text: m.date || '' }),
           m.phase ? el('span', { text: m.phase }) : null,
+          // 来源标注：主播放源是腾讯点播（官方、多档清晰度），
+          // B 站是同一场的同源录像（本站叠弹幕），点播/宣传片则来自官方内容流。
+          m.official
+            ? el('span', { class: 'src-tag tx', text: '官方发布' })
+            : el('span', { class: 'src-tag tx', text: '腾讯点播' }),
+          m.bvid ? el('span', { class: 'src-tag bili', text: 'B站同源' }) : null,
         ]),
       ]),
     ]);
@@ -2650,6 +2823,30 @@
         m.bvid ? el('span', { text: 'B站源：' + m.bvid }) : null,
       ]),
     ]));
+
+    // 备用源：同一场的 B 站同源录像（可能清晰度更高、弹幕更热闹）；
+    // 没有同源时给一个 B 站搜索入口 —— 任何一场录像都能找到去处。
+    const pairKw = [m.teamA, m.teamB].filter(Boolean).join(' ');
+    const biliAltUrl = m.bvid
+      ? 'https://www.bilibili.com/video/' + m.bvid + (m.biliPage > 1 ? '?p=' + m.biliPage : '')
+      : 'https://search.bilibili.com/all?keyword=' +
+        encodeURIComponent((pairKw || m.title || '').trim());
+    left.appendChild(
+      el('div', { class: 'watch-alt' }, [
+        el('button', {
+          class: 'ctrl-btn',
+          text: m.bvid ? 'B站同源录像 ↗' : '在 B 站搜索这场 ↗',
+          onclick: () => {
+            const w = window.open(biliAltUrl, '_blank', 'noopener');
+            if (!w) toast('浏览器拦截了新标签，请允许弹窗后重试');
+          },
+        }),
+        el('span', {
+          class: 'wa-note',
+          text: m.bvid ? '同一场比赛的 B 站录像（清晰度/弹幕以 B 站为准）' : '本站暂无 B 站同源，可到 B 站搜同名录像',
+        }),
+      ])
+    );
 
     wrap.appendChild(left);
 
@@ -2803,6 +3000,7 @@
       return;
     }
     await ensureTeamLogos();
+    const now = Date.now();
 
     // 实时覆盖：正在进行的比赛用腾讯实时数据刷新比分（跨域可读，零构建期依赖）
     let liveOverlaid = 0;
@@ -2829,17 +3027,60 @@
     games.sort((a, b) => ((evMaxDate.get(b) || '') > (evMaxDate.get(a) || '') ? 1 : -1));
 
     view.innerHTML = '';
+    const fresh = scheduleFreshness(Repo.scheduleMeta, list);
+    const evInfos = await ensureEventInfo();
+    const curEvent = pickCurrentEvent(evInfos, list);
     const head = el('div', { class: 'section-head' }, [
       el('h2', { text: '赛事赛程' }),
       el('span', { text: '共 ' + list.length + ' 场 · 对阵图对齐腾讯 LPL 官方「赛事进度」' }),
-      liveOverlaid
-        ? el('span', { class: 'badge badge-live', text: '● ' + liveOverlaid + ' 场比分实时' })
-        : el('span', {
-            class: 'updated-at',
-            text: '数据更新于 ' + (cat.updatedAt || '—').replace('T', ' ').slice(0, 16),
-          }),
-    ]);
+      liveOverlaid ? el('span', { class: 'badge badge-live', text: '● ' + liveOverlaid + ' 场比分实时' }) : null,
+      el('span', {
+        class: 'updated-at' + (fresh.stale ? ' stale' : ''),
+        text: '赛程快照 ' + fmtSnapshotTime(fresh.updatedAt) + '（' + fresh.ageLabel + '）',
+      }),
+    ].filter(Boolean));
     view.appendChild(head);
+
+    // 快照陈旧时必须说清楚：后续轮次的对阵可能已经变了（淘汰队伍还挂在赛程里就是这么来的）
+    if (fresh.stale) {
+      view.appendChild(
+        el('div', { class: 'sched-stale' }, [
+          el('span', { class: 'ss-icon', text: '!' }),
+          el('div', { class: 'ss-text' }, [
+            el('b', {
+              text: fresh.missed
+                ? '赛程快照落后于最新赛果（' + fresh.missed + ' 场已开打但快照里没有比分）'
+                : '赛程快照已滞后 ' + fresh.ageLabel,
+            }),
+            el('p', {
+              text:
+                '腾讯的全量对阵表是裸 JSON 且没有跨域头，浏览器运行时读不到，只能构建期抓取快照。' +
+                '因此未开打场次的对阵可能已经变化（被淘汰的队伍会从后续赛程里消失），下面这些场次已标为「待确认」。',
+            }),
+          ]),
+          el('a', {
+            class: 'ss-link',
+            href: OFFICIAL_SCHEDULE_URL,
+            target: '_blank',
+            rel: 'noopener',
+            text: '看腾讯官方对阵图 ↗',
+          }),
+        ])
+      );
+    }
+
+    // 当前赛事（赛事名与起止日期来自腾讯的赛事元信息接口，运行时可读）
+    if (curEvent) {
+      view.appendChild(
+        el('div', { class: 'sched-event-meta' }, [
+          curEvent.logo
+            ? el('img', { class: 'sem-logo', src: curEvent.logo, alt: curEvent.name, loading: 'lazy' })
+            : null,
+          el('span', { class: 'sem-name', text: curEvent.name }),
+          el('span', { class: 'sem-range', text: (curEvent.start || '') + ' — ' + (curEvent.end || '') }),
+        ].filter(Boolean))
+      );
+    }
 
     // 赛事选择（官方那种下拉）
     const picker = el('div', { class: 'sched-picker' });
@@ -2878,6 +3119,65 @@
     picker.appendChild(list_);
     document.addEventListener('click', closeList, { once: true });
     view.appendChild(picker);
+
+    // 「今天起」速览：对阵图是按轮次排的，用户最先想知道的其实是「今天有哪几场」。
+    // 比分已经被腾讯实时数据覆盖过，这里直接按时间顺序铺开。
+    const todayStr = (() => {
+      const d = new Date();
+      return (
+        d.getFullYear() +
+        '-' +
+        String(d.getMonth() + 1).padStart(2, '0') +
+        '-' +
+        String(d.getDate()).padStart(2, '0')
+      );
+    })();
+    const soonList = list
+      .filter((m) => m.date && m.teamA && m.teamB && !/^D\d/i.test(m.teamA))
+      .filter((m) => dayKeyOf(m.date) >= todayStr)
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+      .slice(0, 10);
+    if (soonList.length) {
+      const box = el('div', { class: 'sched-soon' });
+      box.appendChild(el('h3', { class: 'ss-title', text: '今天起的赛程' }));
+      const ul = el('ul', { class: 'soon-list' });
+      soonList.forEach((m) => {
+        const li = el('li', { class: 'soon-row' + (m.live ? ' is-live' : '') });
+        const d = dayLabel(m.date);
+        li.appendChild(el('span', { class: 'soon-day', text: d.md + (d.wd ? ' ' + d.wd : '') }));
+        li.appendChild(el('span', { class: 'soon-time', text: timeOf(m.date) }));
+        const a = teamByTeamId(m.teamIdA, m.teamA);
+        const b = teamByTeamId(m.teamIdB, m.teamB);
+        li.appendChild(el('span', { class: 'soon-team', text: a.name || m.teamA }));
+        li.appendChild(el('span', { class: 'soon-score', text: m.score || '0 : 0' }));
+        li.appendChild(el('span', { class: 'soon-team b', text: b.name || m.teamB }));
+        if (m.live) {
+          li.appendChild(el('span', { class: 'soon-live', text: '直播中' }));
+        } else if (m.id) {
+          li.appendChild(el('button', {
+            class: 'soon-play',
+            text: '▶ 录播',
+            onclick: (e) => {
+              e.stopPropagation();
+              location.hash = '#/watch/' + m.id;
+            },
+          }));
+        } else if (m.bvid) {
+          li.appendChild(el('button', {
+            class: 'soon-play bili',
+            text: 'B站录播',
+            onclick: (e) => {
+              e.stopPropagation();
+              const pg = m.biliPage > 1 ? '?p=' + m.biliPage : '';
+              window.open('https://www.bilibili.com/video/' + m.bvid + pg, '_blank', 'noopener');
+            },
+          }));
+        }
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+      view.appendChild(box);
+    }
 
     // 赛事进度（对齐官方 event.html?tabId=progress）：轮次分列 + 对阵行
     const seriesMap = new Map();
@@ -2971,12 +3271,25 @@
           const aWin = Number(sa) > Number(sb);
           const bWin = Number(sb) > Number(sa);
           const done2 = !!s.score && s.score !== '0:0';
+          // 快照陈旧时，未开打场次的对阵可能已经变了（淘汰队伍还挂在赛程里就是这么来的）
+          // —— 这种场次不再显示队名，标为「待确认」，宁可空着也不给错信息。
+          const st = s.date ? new Date(String(s.date).replace(/-/g, '/')).getTime() : 0;
+          const unconfirmed = fresh.stale && !done2 && !s.live && st > now - 2 * 3600000;
           const li = el('li', {
-            class: 'bracket-row' + (done2 ? ' done' : ' todo') + (s.live ? ' is-live' : ''),
+            class:
+              'bracket-row' +
+              (done2 ? ' done' : ' todo') +
+              (s.live ? ' is-live' : '') +
+              (unconfirmed ? ' unconfirmed' : ''),
           });
           if (s.live) li.title = '正在直播（比分实时更新）';
           const mkSide = (name, id, score, win) => {
             const side = el('span', { class: 'bside' + (win ? ' win' : '') });
+            if (unconfirmed) {
+              side.appendChild(el('span', { class: 'blogo ph', text: '?' }));
+              side.appendChild(el('span', { class: 'babbr pending', text: '待确认' }));
+              return side;
+            }
             const info = teamByTeamId(id, name);
             const lg = info.logo;
             side.appendChild(lg
@@ -2988,6 +3301,9 @@
           li.appendChild(mkSide(s.teamA, s.teamIdA, sa, aWin));
           li.appendChild(el('span', { class: 'bscore', text: done2 ? sa + ' : ' + sb : '0 : 0' }));
           li.appendChild(mkSide(s.teamB, s.teamIdB, sb, bWin));
+          if (unconfirmed) {
+            li.title = (s.date || '') + ' · 赛程快照已滞后，对阵待官方确认（点击官方对阵图核对）';
+          }
           // 可看录播：腾讯有录像 → 站内播放页；只有 B 站源 → 新标签打开 B 站
           if (s.id) {
             li.classList.add('has-vod');
@@ -3029,6 +3345,10 @@
       bracket.appendChild(evBox);
     });
     view.appendChild(bracket);
+
+    // 记录签名并开启轮询（比分实时刷新 + 定期重拉线上快照）
+    lastSchedSig = schedSignature(list, liveOverlaid);
+    startSchedulePoll();
   }
 
   /* ------------------------------------------------------------------ *
@@ -3040,6 +3360,7 @@
   async function refreshRuntimeData(silent) {
     Repo.catalog = null;
     Repo.schedule = null;
+    Repo.scheduleMeta = null;
     biliRooms = [];
     teamLogos = null;
     teamById = null;
@@ -3076,6 +3397,57 @@
     livePollTimer = null;
   }
 
+  /* ---------------- 赛程页自动刷新 ---------------- */
+  let schedPollTimer = null;
+  let lastSchedSig = '';
+
+  /** 赛程页的内容签名：只有真的变了才重绘，避免打断用户滚动 */
+  function schedSignature(list, overlaid) {
+    const rows = (list || [])
+      .map((m) => (m.date || '') + '|' + (m.teamA || '') + '|' + (m.teamB || '') + '|' + (m.score || ''))
+      .join(';');
+    return rows.length + '#' + rows.length + '#' + (overlaid || 0) + '#' + rows.slice(0, 400) + '#' + rows.slice(-400);
+  }
+
+  /**
+   * 赛程页轮询：轻量实时比分（腾讯 LiveBMatchList，约 750 字节）每 30 秒拉一次；
+   * 线上快照（schedule.json，约 390KB，部署端 Cache-Control: no-store 不可缓存）
+   * 每 5 分钟才重拉一次。有变化才重绘，并保留滚动位置。
+   * 这样赛程页也能像录像页一样「自己会更新」，又不会把带宽打满。
+   */
+  function startSchedulePoll() {
+    stopSchedulePoll();
+    let tick = 0;
+    schedPollTimer = setInterval(async () => {
+      if (document.hidden) return;
+      tick++;
+      const heavy = tick === 1 || tick % 10 === 0; // 进页后 30 秒先重拉一次，之后每 5 分钟
+      try {
+        const list = heavy ? await Repo.loadSchedule(true) : Repo.schedule || (await Repo.loadSchedule());
+        let overlaid = 0;
+        try {
+          const lbm = await loadGlobalScript(LIVE_BMATCH_JS, 'LiveBMatchList', true).catch(() => null);
+          if (lbm && lbm.msg) overlaid = overlayLiveMatches(list, lbm.msg);
+        } catch (e) {
+          /* 实时源失败不影响快照部分 */
+        }
+        const sig = schedSignature(list, overlaid);
+        if (sig === lastSchedSig) return;
+        lastSchedSig = sig;
+        const y = window.scrollY;
+        await renderSchedule();
+        window.scrollTo(0, y);
+      } catch (e) {
+        /* 网络抖动忽略 */
+      }
+    }, 30000);
+  }
+
+  function stopSchedulePoll() {
+    if (schedPollTimer) clearInterval(schedPollTimer);
+    schedPollTimer = null;
+  }
+
   /* ------------------------------------------------------------------ *
    * 6. 路由
    * ------------------------------------------------------------------ */
@@ -3088,6 +3460,7 @@
       activePlayer = null;
     }
     stopLivePoll();
+    stopSchedulePoll();
     ensureBiliRooms();
     if (page === 'vod') renderVod();
     else if (page === 'watch') renderWatch(parts[1]);
