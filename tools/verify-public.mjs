@@ -6,6 +6,10 @@ import { upstreamKeys, localKeys, todayKey } from './schedule-keys.mjs';
 const { chromium } = resolvePlaywright().pw;
 
 const URL = process.argv[2] || 'https://4kf9kfxujfhg2.space.mcode.cn';
+// 站点托管在 OSS + CDN 上，index.html 会被缓存约 10 分钟。线上验收必须拿到
+// 「最新一版」页面，否则刚发完版会拿旧页面/旧脚本跑验收，判据会假失败。
+// 这里给每次导航加一个时间戳绕开缓存。
+const pageUrl = (hash) => URL + '/?t=' + Date.now() + (hash || '');
 const results = [];
 const check = (n, p, d) => {
   results.push({ n, p: !!p, d: d || '' });
@@ -50,7 +54,7 @@ check('app.js / danmaku.js / hls.js 可访问', assets['/assets/app.js'] === 200
 check('catalog.json 可访问', assets['/data/catalog.json'] === 200);
 
 console.log('\n[2] 直播页');
-await page.goto(URL + '/#/live', { waitUntil: 'domcontentloaded' });
+await page.goto(pageUrl('#/live'), { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(16000);
 const live = await page.evaluate(() => {
   const v = document.querySelector('.player video');
@@ -293,7 +297,7 @@ check(
 );
 
 console.log('\n[3] 录像库 + 播放 + 弹幕');
-await page.goto(URL + '/#/vod', { waitUntil: 'domcontentloaded' });
+await page.goto(pageUrl('#/vod'), { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(4500);
 const vod = await page.evaluate(async () => {
   const cards = [...document.querySelectorAll('.card')];
@@ -382,7 +386,7 @@ const watchAlt = await page.evaluate(() => ({
 check('播放页提供备用源出口（B站同源/搜索）', /B站/.test(watchAlt.btn), watchAlt.btn);
 
 console.log('\n[4] 赛程页（官方赛事进度视图）');
-await page.goto(URL + '/#/schedule', { waitUntil: 'domcontentloaded' });
+await page.goto(pageUrl('#/schedule'), { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(4500);
 const sch = await page.evaluate(() => ({
   events: document.querySelectorAll('.bracket-event').length,
@@ -440,7 +444,7 @@ check(
 );
 
 // 上一步点进了播放页，必须先回到赛程页，否则赛程行根本不在 DOM 里
-await page.goto(URL + '/#/schedule', { waitUntil: 'domcontentloaded' });
+await page.goto(pageUrl('#/schedule'), { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(3000);
 const biliClick = await page.evaluate(async () => {
   const row = document.querySelector('.bracket-row.bili-only');
@@ -477,7 +481,7 @@ await stalePage.route('**/data/schedule.json*', async (route) => {
     body: JSON.stringify(body),
   });
 });
-await stalePage.goto(URL + '/#/schedule', { waitUntil: 'domcontentloaded' });
+await stalePage.goto(pageUrl('#/schedule'), { waitUntil: 'domcontentloaded' });
 await stalePage.waitForTimeout(5000);
 const stale = await stalePage.evaluate(() => ({
   banner: !!document.querySelector('.sched-stale'),
@@ -520,7 +524,7 @@ try {
 
 console.log('\n[5] 移动端');
 const mob = await browser.newPage({ viewport: { width: 390, height: 844 } });
-await mob.goto(URL + '/#/vod', { waitUntil: 'domcontentloaded' });
+await mob.goto(pageUrl('#/vod'), { waitUntil: 'domcontentloaded' });
 await mob.waitForTimeout(4000);
 await mob.screenshot({ path: 'data/ui-smoke/08-mobile-vod.png' });
 const mobLayout = await mob.evaluate(() => {
@@ -549,7 +553,7 @@ check('移动端筛选下拉框可用（未被压扁）', mobLayout.selW >= 90, 
 check('移动端筛选标签不竖排', mobLayout.labelH > 0 && mobLayout.labelH < 34, 'label 高 ' + mobLayout.labelH + 'px');
 
 // 移动端直播页：菜单按钮图标 / 音量滑块 / 控制条不溢出
-await mob.goto(URL + '/#/live', { waitUntil: 'domcontentloaded' });
+await mob.goto(pageUrl('#/live'), { waitUntil: 'domcontentloaded' });
 await mob.waitForTimeout(7000);
 await mob.screenshot({ path: 'data/ui-smoke/08b-mobile-live.png' });
 const mobLive = await mob.evaluate(() => {
@@ -594,7 +598,7 @@ check(
   `ctrl ${mobLive.ctrlRowW}px vs player ${mobLive.playerW}px`
 );
 
-await mob.goto(URL + '/#/schedule', { waitUntil: 'domcontentloaded' });
+await mob.goto(pageUrl('#/schedule'), { waitUntil: 'domcontentloaded' });
 await mob.waitForTimeout(3500);
 await mob.screenshot({ path: 'data/ui-smoke/08c-mobile-schedule.png' });
 const mobSch = await mob.evaluate(() => {

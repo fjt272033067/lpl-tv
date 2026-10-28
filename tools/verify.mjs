@@ -106,6 +106,19 @@ function check(name, pass, detail) {
     console.log('   [net] ' + line);
   });
 
+  /* ---------------- 静态资源版本戳 ---------------- */
+  // 站点托管在 OSS + CDN 上，资源对象会被缓存约 10 分钟：不带构建戳的话，
+  // 刚发完版线上仍会返回上一版的 app.js（「我改了但用户看不到」）。
+  const idxHtml = fs.readFileSync(path.join(SITE, 'index.html'), 'utf8');
+  const stamped = ['assets/app.js', 'assets/style.css', 'assets/danmaku.js'].filter((u) =>
+    new RegExp('["\']' + u.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\?v=[0-9a-f]+["\']').test(idxHtml)
+  );
+  check(
+    'index.html 的静态资源带构建戳（避开 CDN 旧缓存）',
+    stamped.length === 3,
+    stamped.length + '/3 个资源已加戳'
+  );
+
   /* ---------------- 直播页 ---------------- */
   console.log('[直播页]');
   await page.goto(base + '/#/live', { waitUntil: 'domcontentloaded' });

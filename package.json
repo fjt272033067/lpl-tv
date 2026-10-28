@@ -8,6 +8,7 @@
     "serve": "node tools/serve.mjs 8080",
     "bake": "node tools/bake.mjs --vods=160",
     "bake:fast": "node tools/bake.mjs --vods=160 --no-danmaku",
+    "stamp": "node tools/stamp-assets.mjs",
     "repair": "node tools/repair-danmaku.mjs",
     "rooms": "node tools/refresh-liverooms.mjs",
     "verify": "node tools/verify.mjs",

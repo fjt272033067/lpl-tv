@@ -224,6 +224,20 @@ node tools/set-data-base.mjs https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/sit
 
 也就是说**数据日更不需要重新部署站点** —— 这是「赛程像录像一样自动更新」的关键。
 
+### 发布流程（改前端时）
+
+站点托管在阿里云 OSS + CDN 上，**资源对象会被缓存约 10 分钟**（响应里 `Age: xxx`）。
+不处理的话，刚发完版线上 `/assets/app.js` 仍会返回上一版文件 —— 「改了但用户看不到」，
+连线上验收都会拿到旧代码。所以发布前先盖构建戳：
+
+```bash
+node tools/stamp-assets.mjs     # 给 app.js / style.css / danmaku.js 的 URL 挂上内容哈希戳
+# 然后再部署 site/ 目录
+```
+
+戳是内容哈希：资源没变则戳不变（仍然命中 CDN 缓存，不多下载）；变了则 URL 变，
+CDN 必然回源取新文件，且 `index.html` 与脚本的戳同源，不会出现「新页面配旧脚本」。
+
 ### 启用步骤
 
 1. 把本仓库推到一个**公开仓库**（站点要匿名读 CDN 上的 JSON）。
