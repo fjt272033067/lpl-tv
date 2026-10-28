@@ -10,6 +10,14 @@
     />
     <meta name="theme-color" content="#0b0e14" />
     <meta name="referrer" content="no-referrer" />
+    <!--
+      可选：远端数据源基址（留空 = 只用本地烘焙快照，行为不变）。
+      填成「含 schedule.json / catalog.json / liverooms.json 的目录」后，站点会把本地与
+      远端两份都读回来并按 updatedAt 取更新的那份 —— 于是 CI 每次重建只要把 site/data
+      提交到公开仓库，赛程与直播源就能日更，不必重新部署站点本身。
+      例：https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/site/data
+    -->
+    <meta name="lpl-tv-data-base" content="" />
     <!-- 微信/QQ 内置浏览器（X5）适配 -->
     <meta name="x5-orientation" content="landscape" />
     <meta name="x5-fullscreen" content="true" />

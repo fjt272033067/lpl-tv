@@ -200,6 +200,46 @@ node tools/bake.mjs --vods=160 --no-danmaku   # 只刷赛程，跳过弹幕
 > （返回 412 风控页）；因此脚本统一用 `execFileSync` 调 `curl.exe`（**不能用 `execSync`**——Windows 下
 > 会走 cmd.exe，Cookie 里的 `;` 和 URL 里的 `&` 会把命令拆碎）。
 
+## 让数据自动更新（远端数据源 + CI）
+
+赛程、录像目录、B 站直播流地址这三份数据**只能构建期抓**（上游没有跨域头，详见「已知边界」），
+所以「数据自动更新」= 必须有一个会自己跑的构建环境。站点侧为此留了一个口子：
+
+**远端数据源**（`site/index.html` 的 `<meta name="lpl-tv-data-base">`）
+站点把**本地烘焙快照**和**远端数据源**两份都读回来，**按 `updatedAt` 取更新的那份**；
+远端不可用时自动回退本地快照，站点不会因为外部依赖而打不开。
+默认留空 = 只用本地快照（零额外请求，行为与从前完全一致）。
+
+```bash
+node tools/set-data-base.mjs https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/site/data
+# 不带参数 = 关闭远端数据源
+```
+
+配好之后：
+
+| 事情 | 谁来做 | 要多久生效 |
+|---|---|---|
+| 赛程 / 录像 / 直播源数据更新 | CI（`.github/workflows/refresh-data.yml`，每 20 分钟） | 站点轮询，约 5 分钟内 |
+| 站点前端改动 | 人工重新部署 `site/` | 立即 |
+
+也就是说**数据日更不需要重新部署站点** —— 这是「赛程像录像一样自动更新」的关键。
+
+### 启用步骤
+
+1. 把本仓库推到一个**公开仓库**（站点要匿名读 CDN 上的 JSON）。
+2. 打开仓库的 Actions → 启用 `refresh-data` 工作流（手动跑一次，确认能提交 `site/data`）。
+3. 设远端基址并**重新部署一次**站点：
+
+   ```bash
+   node tools/set-data-base.mjs https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/site/data
+   # 然后部署 site/ 目录
+   ```
+
+4. 之后数据由 CI 自己维护，站点不再需要人工部署。
+
+> 国内访问 `raw.githubusercontent.com` 不稳，优先用 jsDelivr（`cdn.jsdelivr.net`，带 `ACAO: *`）。
+> 站点对远端请求有 8 秒超时，CDN 挂了会立刻回退本地快照，不会卡住首屏。
+
 ## 端到端验收
 
 ```bash

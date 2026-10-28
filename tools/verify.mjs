@@ -5,6 +5,7 @@
  * ===================================================================== */
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -212,6 +213,28 @@ function check(name, pass, detail) {
   // 线路文案必须各不相同（用户反馈：次线路内容不同但文案一模一样）
   const distinct = new Set(lineItems.map((t) => t.replace(/^[✓\s]*/, '').split('·')[0].trim())).size;
   check('各线路文案互不相同', distinct >= Math.min(3, lineItems.length), distinct + ' 种不同文案');
+
+  // 「刷新直播源」：B 站流地址约 60 分钟有效，页面开久了地址会过期，
+  // 必须给用户一个能立刻换新地址的出口（不必刷新整个页面、丢播放进度）。
+  const hasRefreshBtn = await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button')].find((x) => /刷新直播源/.test(x.textContent || ''));
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  await page.waitForTimeout(3000);
+  const refreshState = await page.evaluate(() => ({
+    toast: (document.querySelector('#toast') || {}).textContent || '',
+    btn: (([...document.querySelectorAll('button')].find((x) => /刷新直播源|正在刷新/.test(x.textContent || '')) || {})
+      .textContent ||
+      '')
+      .trim(),
+  }));
+  check(
+    '直播页提供「刷新直播源」（B站地址过期可手动换新）',
+    hasRefreshBtn && /已是最新|已更新/.test(refreshState.toast),
+    'toast=' + (refreshState.toast || '(无)') + ' btn=' + refreshState.btn
+  );
 
   // B 站线路的清晰度必须按实际档位排序，且不得混入别的游戏分区
   // （用户反馈「其余线路不清晰」—— 其实一半线路是别的游戏在播）
@@ -829,6 +852,113 @@ function check(name, pass, detail) {
   check('陈旧快照下未开打对阵标为「待确认」', stale.pending >= 1 && /待确认/.test(stale.pendingText), 'pending=' + stale.pending);
   check('陈旧提示给出官方对阵图出口', /lpl\.qq\.com/.test(stale.link), stale.link);
   await stalePage.close();
+
+  /* ---------------- 远端数据源（赛程自动更新的通道） ---------------- */
+  // 站点把「本地烘焙快照」与「远端数据源」两份都读回来，按 updatedAt 取更新的那份。
+  // 这条链路是「赛程像录像一样自动更新」的实现基础：CI 只需更新 JSON 文件，
+  // 不必重新部署站点；远端不可用时必须干净地回退本地快照。
+  const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lpltv-remote-'));
+  const localSched = JSON.parse(fs.readFileSync(path.join(SITE, 'data', 'schedule.json'), 'utf8'));
+  const localCat = JSON.parse(fs.readFileSync(path.join(SITE, 'data', 'catalog.json'), 'utf8'));
+  // 远端必须比本地新（用「本地 + 1 小时」保证无论何时跑都比本地新）
+  const remoteIso = new Date((Date.parse(localSched.updatedAt) || Date.now()) + 3600000).toISOString();
+  const remoteMatches = [
+    {
+      id: '',
+      title: '远端测试 RA vs RB',
+      game: '远端测试赛',
+      phase: '测试轮',
+      mode: 'BO5',
+      date: '2026-10-29 10:00:00',
+      duration: 0,
+      cover: '',
+      teamA: 'RA',
+      teamB: 'RB',
+      teamIdA: '',
+      teamIdB: '',
+      score: '1:0',
+      place: '',
+      published: false,
+      bvid: '',
+      biliPage: 0,
+    },
+  ];
+  fs.writeFileSync(
+    path.join(remoteDir, 'schedule.json'),
+    JSON.stringify({ updatedAt: remoteIso, source: '远端测试源', total: remoteMatches.length, matches: remoteMatches })
+  );
+  fs.writeFileSync(
+    path.join(remoteDir, 'catalog.json'),
+    JSON.stringify({ updatedAt: remoteIso, matches: (localCat.matches || []).concat(remoteMatches) })
+  );
+  fs.writeFileSync(
+    path.join(remoteDir, 'liverooms.json'),
+    JSON.stringify({ updatedAt: remoteIso, rooms: [], externalRooms: [] })
+  );
+  const remoteServer = http.createServer((req, res) => {
+    const p = decodeURIComponent(req.url.split('?')[0]);
+    const file = path.join(remoteDir, p);
+    if (!file.startsWith(remoteDir) || !fs.existsSync(file)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('404');
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+    });
+    fs.createReadStream(file).pipe(res);
+  });
+  const remotePort = await new Promise((r) => remoteServer.listen(0, '127.0.0.1', () => r(remoteServer.address().port)));
+  const remoteBase = `http://127.0.0.1:${remotePort}`;
+
+  const remotePage = await ctx.newPage();
+  await remotePage.addInitScript((b) => {
+    window.__LPLTV_DATA_BASE__ = b;
+  }, remoteBase);
+  await remotePage.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
+  await remotePage.waitForTimeout(4500);
+  const remoteState = await remotePage.evaluate(() => ({
+    label: (document.querySelector('.updated-at') || {}).textContent || '',
+    text: (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 3000),
+  }));
+  const remoteMark = new Date(remoteIso);
+  const remoteDay =
+    remoteMark.getFullYear() +
+    '-' +
+    String(remoteMark.getMonth() + 1).padStart(2, '0') +
+    '-' +
+    String(remoteMark.getDate()).padStart(2, '0');
+  console.log('   远端数据源: ' + JSON.stringify(remoteState.label));
+  check(
+    '远端数据源被采用（快照时间取更新的那份并标注来源）',
+    /远端实时数据/.test(remoteState.label) && remoteState.label.indexOf(remoteDay) >= 0,
+    remoteState.label
+  );
+  check('远端赛程内容真正生效（不只是标签变了）', /RA/.test(remoteState.text), remoteState.text.slice(0, 90));
+  await remotePage.close();
+
+  // 远端不可用 → 必须回退本地快照，站点照常可用
+  const deadPage = await ctx.newPage();
+  await deadPage.addInitScript(() => {
+    window.__LPLTV_DATA_BASE__ = 'http://127.0.0.1:1/nope';
+  });
+  await deadPage.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
+  await deadPage.waitForTimeout(6000);
+  const deadState = await deadPage.evaluate(() => ({
+    label: (document.querySelector('.updated-at') || {}).textContent || '',
+    rows: document.querySelectorAll('.bracket-row').length,
+    err: document.querySelector('.state h3') ? document.querySelector('.state h3').textContent : '',
+  }));
+  console.log('   远端挂掉时: ' + JSON.stringify(deadState));
+  check(
+    '远端不可用时回退本地快照（站点仍可用）',
+    deadState.rows > 0 && !/远端实时数据/.test(deadState.label) && !deadState.err,
+    'rows=' + deadState.rows + ' err=' + deadState.err
+  );
+  await deadPage.close();
+  remoteServer.close();
 
   /* ---------------- 移动端 ---------------- */
   console.log('\n[移动端]');

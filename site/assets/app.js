@@ -193,6 +193,67 @@
   const OFFICIAL_FEED_JS =
     'https://apps.game.qq.com/cmc/zmMcnAuthorContentList?type=1&page=1&num=40&r1=authorid&authorid=288&source=web_pc';
 
+  /* ------------------------------------------------------------------ *
+   * 远端数据源（可选，默认关闭）
+   * ------------------------------------------------------------------ *
+   * 赛程 / 录像目录 / 直播源这三份数据是构建期烘焙的 —— 腾讯的全量对阵表是裸 JSON
+   * 且没有跨域头，B 站的直播流地址接口同样不给 ACAO、JSONP 又会被 ORB 拦死，
+   * 浏览器运行时都读不到。所以本地快照必然会随时间变旧。
+   *
+   * 这里开一个口子：如果配置了远端基址（CI 每次重建后把 site/data 提交到公开仓库，
+   * 由 raw.githubusercontent.com / jsDelivr 这类带 ACAO 的静态托管提供），站点就把
+   * 本地与远端两份都读回来，**按 updatedAt 取更新的那份**。于是：
+   *   · 数据更新只需要更新 JSON 文件，**不必重新部署站点**；
+   *   · 远端挂了自动回退本地快照，站点不会因为外部依赖而打不开；
+   *   · 站点本身依然是纯静态、零后端。
+   *
+   * 配置方式：index.html 里的 <meta name="lpl-tv-data-base" content="…">，
+   * 或运行时设置 window.__LPLTV_DATA_BASE__（测试用）。留空 = 只用本地快照。
+   */
+  function readDataBase() {
+    try {
+      const w = window.__LPLTV_DATA_BASE__;
+      if (typeof w === 'string' && w.trim()) return w.trim().replace(/\/+$/, '');
+    } catch (e) {
+      /* 非浏览器环境 */
+    }
+    const m = document.querySelector('meta[name="lpl-tv-data-base"]');
+    const v = m ? (m.getAttribute('content') || '').trim() : '';
+    return v.replace(/\/+$/, '');
+  }
+  const REMOTE_DATA_BASE = readDataBase();
+
+  /** 带超时的 JSON 抓取：远端不可用时返回 null，绝不拖慢首屏、也不抛错 */
+  async function fetchJson(url, timeoutMs) {
+    if (!timeoutMs) {
+      try {
+        const r = await fetch(url, { cache: 'no-cache' });
+        return r.ok ? await r.json() : null;
+      } catch (e) {
+        return null;
+      }
+    }
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const r = await fetch(url, { cache: 'no-cache', signal: ctrl ? ctrl.signal : undefined });
+      return r.ok ? await r.json() : null;
+    } catch (e) {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** 两份数据取更新的那份（updatedAt 大的优先） */
+  function pickNewer(local, remote) {
+    if (!remote) return local;
+    if (!local) return remote;
+    const lt = Date.parse(local.updatedAt || '') || 0;
+    const rt = Date.parse(remote.updatedAt || '') || 0;
+    return rt > lt ? remote : local;
+  }
+
   /* 运行时数据：队伍 logo 与简称（按简称 / ID 双索引） */
   let teamLogos = null;
   let teamById = null;
@@ -1508,33 +1569,46 @@
     schedule: null,
     /** 赛程快照的元信息（快照时间 / 场次数 / 来源），用于展示新鲜度 */
     scheduleMeta: null,
+    /** 数据实际来自本地烘焙快照还是远端数据源（用于界面如实标注） */
+    origin: 'local',
     async load() {
       if (this.catalog) return this.catalog;
       const res = await fetch('data/catalog.json', { cache: 'no-cache' });
       if (!res.ok) throw new Error('赛程数据加载失败');
-      this.catalog = await res.json();
+      const local = await res.json();
+      let remote = null;
+      if (REMOTE_DATA_BASE) remote = await fetchJson(REMOTE_DATA_BASE + '/catalog.json', 8000);
+      const picked = pickNewer(local, remote);
+      this.origin = picked === remote ? 'remote' : 'local';
+      this.catalog = picked;
       return this.catalog;
     },
     /** 完整赛程（含未开赛 / 未发布的比赛），用于对阵图 */
     async loadSchedule(force) {
       if (this.schedule && !force) return this.schedule;
+      // force 时加时间戳绕过 CDN / 浏览器缓存，确保拿到线上最新的一份快照
+      const bust = force ? '?t=' + Date.now() : '';
+      let local = null;
       try {
-        // force 时加时间戳绕过 CDN / 浏览器缓存，确保拿到线上最新的一份快照
-        const url = force ? 'data/schedule.json?t=' + Date.now() : 'data/schedule.json';
-        const res = await fetch(url, { cache: 'no-cache' });
-        if (res.ok) {
-          const j = await res.json();
-          this.schedule = j.matches || [];
-          this.scheduleMeta = {
-            updatedAt: j.updatedAt || '',
-            total: j.total || this.schedule.length,
-            source: j.source || '',
-          };
-          return this.schedule;
-        }
+        const res = await fetch('data/schedule.json' + bust, { cache: 'no-cache' });
+        if (res.ok) local = await res.json();
       } catch (e) {
-        /* 回退到 catalog */
+        /* 落到远端或 catalog 回退 */
       }
+      let remote = null;
+      if (REMOTE_DATA_BASE) remote = await fetchJson(REMOTE_DATA_BASE + '/schedule.json' + bust, 8000);
+      const picked = pickNewer(local, remote);
+      if (picked && Array.isArray(picked.matches)) {
+        this.schedule = picked.matches;
+        this.scheduleMeta = {
+          updatedAt: picked.updatedAt || '',
+          total: picked.total || picked.matches.length,
+          source: picked.source || '',
+          origin: picked === remote ? 'remote' : 'local',
+        };
+        return this.schedule;
+      }
+      /* 回退到 catalog */
       const cat = await this.load();
       this.schedule = cat.matches || [];
       this.scheduleMeta = { updatedAt: cat.updatedAt || '', total: this.schedule.length, source: 'catalog' };
@@ -2057,6 +2131,69 @@
     /** 播放器下方的标题块：跟随当前线路更新（须在 applySource 之前定义） */
     const titleBox = el('div', { style: { marginTop: '14px' } });
     left.appendChild(titleBox);
+
+    /* 「刷新直播源」——
+     * B 站的流地址是服务端签发的，有效期约 60 分钟，页面开久了地址就会过期。
+     * 这个按钮让用户能立刻换一份新签发的地址，而不必刷新整个页面（不丢播放进度）。
+     * 数据源就绪后（远端数据源 / CI 自动更新），这里的刷新拿到的就是最新快照。 */
+    const refreshLiveBtn = el('button', {
+      class: 'qb-switch',
+      text: '刷新直播源',
+      onclick: async () => {
+        const oldText = refreshLiveBtn.textContent;
+        refreshLiveBtn.disabled = true;
+        refreshLiveBtn.textContent = '正在刷新…';
+        try {
+          const before = liveRoomsUpdatedAt;
+          await ensureBiliRooms(true);
+          if (!liveRoomsUpdatedAt || liveRoomsUpdatedAt === before) {
+            toast('直播源已是最新');
+            return;
+          }
+          // 用新房间重建 B 站线路（保持当前选中的线路不变）
+          let changed = 0;
+          sources.forEach((s) => {
+            if (s.kind !== 'bili') return;
+            const r = biliRooms.find((x) => String(x.roomid) === String(s.room.roomid));
+            if (!r) return;
+            s.room = r;
+            s.name = (r.title || 'B站直播间').slice(0, 28);
+            s.sub = r.roomid + ' · ' + biliQualityLabel(r);
+            s.expired = streamExpired(r);
+            s.playable = !!r.stream && !s.expired;
+            s.viewers = r.online || 0;
+            changed++;
+          });
+          if (!changed) {
+            toast('直播源已是最新');
+            return;
+          }
+          p.setSources(
+            sources.map((x) => ({
+              id: x.id,
+              name: x.name,
+              sub: x.sub,
+              source: x,
+              external: x.kind === 'ext' ? x.external : x.kind === 'bili' && x.expired ? x.room.biliUrl : null,
+            })),
+            currentSource ? currentSource.id : undefined
+          );
+          if (currentSource) updateTitle(currentSource);
+          toast('直播源已更新到 ' + fmtSnapshotTime(liveRoomsUpdatedAt));
+        } catch (err) {
+          toast('刷新失败：' + ((err && err.message) || '未知错误'));
+        } finally {
+          refreshLiveBtn.disabled = false;
+          refreshLiveBtn.textContent = oldText;
+        }
+      },
+    });
+    const liveTools = el('div', { style: { marginTop: '10px' } }, [
+      refreshLiveBtn,
+      el('span', { class: 'qb-note', text: '（B 站流地址约 60 分钟有效，页面开久了点一下换新的）' }),
+    ]);
+    left.appendChild(liveTools);
+
     // 腾讯官方对阵信息 → 统一的横幅结构
     const fromTxMatch = (gm) => ({
       game: gm.GameName || '',
@@ -2527,18 +2664,27 @@
   let biliRooms = [];
   let externalRooms = [];
   let txCovers = {};
-  async function ensureBiliRooms() {
-    if (biliRooms.length) return biliRooms;
+  /** 直播源快照的更新时间（用于判断「刷新直播源」有没有拿到新数据） */
+  let liveRoomsUpdatedAt = '';
+  async function ensureBiliRooms(force) {
+    if (biliRooms.length && !force) return biliRooms;
+    let local = null;
     try {
-      const res = await fetch('data/liverooms.json', { cache: 'no-cache' });
-      if (res.ok) {
-        const j = await res.json();
-        // 兼容两种格式：旧版是数组，新版是 {rooms:[...], currentMatch, externalRooms, txCovers}
-        biliRooms = Array.isArray(j) ? j : (j.rooms || []);
-        externalRooms = Array.isArray(j) ? [] : (j.externalRooms || []);
-        txCovers = Array.isArray(j) ? {} : (j.txCovers || {});
-      }
+      const res = await fetch('data/liverooms.json' + (force ? '?t=' + Date.now() : ''), { cache: 'no-cache' });
+      if (res.ok) local = await res.json();
     } catch (e) {
+      /* 落到远端回退 */
+    }
+    let remote = null;
+    if (REMOTE_DATA_BASE) remote = await fetchJson(REMOTE_DATA_BASE + '/liverooms.json' + (force ? '?t=' + Date.now() : ''), 8000);
+    const j = pickNewer(local, remote);
+    if (j) {
+      // 兼容两种格式：旧版是数组，新版是 {rooms:[...], currentMatch, externalRooms, txCovers}
+      biliRooms = Array.isArray(j) ? j : (j.rooms || []);
+      externalRooms = Array.isArray(j) ? [] : (j.externalRooms || []);
+      txCovers = Array.isArray(j) ? {} : (j.txCovers || {});
+      liveRoomsUpdatedAt = j.updatedAt || '';
+    } else {
       biliRooms = [];
     }
     return biliRooms;
@@ -2914,18 +3060,25 @@
 
     // 加载弹幕
     if (m.cid) {
+      let dj = null;
       try {
         const res = await fetch('data/dm/' + m.cid + '.json', { cache: 'no-cache' });
-        if (res.ok) {
-          const dj = await res.json();
+        if (res.ok) dj = await res.json();
+      } catch (e) {
+        /* 本地无弹幕数据，继续试远端 */
+      }
+      // 远端数据源里可能带着更新的弹幕（新比赛在 CI 重建后才抓到）
+      if (!dj && REMOTE_DATA_BASE) dj = await fetchJson(REMOTE_DATA_BASE + '/dm/' + m.cid + '.json', 6000);
+      if (dj) {
+        try {
           dm.load(dj.items || []);
           dm.seek(p.video.currentTime || 0);
           p.setDanmaku(true);
           p.renderDmMenu();
           window.__dm = dm; // 调试钩子
+        } catch (e) {
+          /* 无弹幕数据，忽略 */
         }
-      } catch (e) {
-        /* 无弹幕数据，忽略 */
       }
     }
   }
@@ -3041,7 +3194,13 @@
       liveOverlaid ? el('span', { class: 'badge badge-live', text: '● ' + liveOverlaid + ' 场比分实时' }) : null,
       el('span', {
         class: 'updated-at' + (fresh.stale ? ' stale' : ''),
-        text: '赛程快照 ' + fmtSnapshotTime(fresh.updatedAt) + '（' + fresh.ageLabel + '）',
+        text:
+          '赛程快照 ' +
+          fmtSnapshotTime(fresh.updatedAt) +
+          '（' +
+          fresh.ageLabel +
+          '）' +
+          (Repo.scheduleMeta && Repo.scheduleMeta.origin === 'remote' ? ' · 远端实时数据' : ''),
       }),
     ].filter(Boolean));
     view.appendChild(head);

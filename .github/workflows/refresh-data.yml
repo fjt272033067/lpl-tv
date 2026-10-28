@@ -1,0 +1,78 @@
+# =====================================================================
+# 自动重建赛事数据并推回仓库
+#
+# 为什么需要这个工作流：
+#   赛程 / 录像目录 / B 站直播流地址这三份数据，上游接口都没有跨域头 ——
+#   腾讯的全量对阵表是裸 JSON（B 站流地址接口不给 ACAO、JSONP 被 ORB 拦死），
+#   浏览器运行时读不到，只能构建期抓。所以要「赛程每天自动更新」，
+#   必须有一个会自己跑的构建环境；桌面手动烘焙做不到。
+#
+# 站点侧已经准备好远端数据源（index.html 的 <meta name="lpl-tv-data-base">）：
+#   它把本地快照与远端两份都读回来，按 updatedAt 取更新的那份。
+#   于是本工作流只要把 site/data 提交到仓库，站点就会自动拿到新数据，
+#   **不需要重新部署站点**。
+#
+# 前提：
+#   1. 仓库必须是公开仓库（站点要匿名读取 CDN 上的 JSON）；
+#   2. 站点部署一次，并把 <meta name="lpl-tv-data-base"> 指向本仓库的 data 目录，
+#      例如 https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/site/data
+#      （国内访问 raw.githubusercontent.com 不稳，jsDelivr 更合适）。
+# =====================================================================
+name: refresh-data
+
+on:
+  schedule:
+    # 每 20 分钟一次。B 站直播流地址有效期约 60 分钟，必须在过期前重签；
+    # 赛程 / 录像目录跟着一起刷新。
+    - cron: '13,33,53 * * * *'
+  workflow_dispatch:
+    inputs:
+      vods:
+        description: '抓取的录像条数（增量模式下只处理新增比赛）'
+        default: '160'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          # 增量烘焙依赖上一次的产物（沿用 B 站录像映射、弹幕缓存）
+          fetch-depth: 0
+
+      - name: 准备 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 注意：不要跑 npm ci。烘焙只用 Node 内置模块，playwright 只有验收才需要，
+      # 装它会白白多花几分钟。
+
+      - name: 重建数据（赛程 / 录像 / 弹幕 / 直播间）
+        run: node tools/bake.mjs --vods=${{ github.event.inputs.vods || '160' }}
+
+      - name: 提交数据
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data
+          if git diff --staged --quiet; then
+            echo "数据无实质变化，跳过提交"
+          else
+            git commit -m "data: 刷新赛事数据快照 $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+            echo "已提交，站点下次轮询（约 5 分钟内）自动取到新数据"
+          fi
+
+      - name: 失败时保留日志
+        if: failure()
+        run: tail -n 120 bake.out.txt 2>/dev/null || true

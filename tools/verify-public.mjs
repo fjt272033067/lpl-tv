@@ -167,6 +167,22 @@ check(
 const distinctLines = new Set((lines.items || []).map((t) => t.replace(/^[✓\s]*/, '').split('·')[0].trim())).size;
 check('各线路文案互不相同', distinctLines >= Math.min(3, (lines.items || []).length), distinctLines + ' 种');
 
+// 「刷新直播源」：B 站流地址约 60 分钟有效，页面开久了会过期，
+// 线上必须给出能立刻换新地址的出口。
+const refreshLive = await page.evaluate(() => {
+  const b = [...document.querySelectorAll('button')].find((x) => /刷新直播源/.test(x.textContent || ''));
+  if (!b) return { found: false };
+  b.click();
+  return { found: true };
+});
+await page.waitForTimeout(3500);
+const refreshToast = await page.evaluate(() => (document.querySelector('#toast') || {}).textContent || '');
+check(
+  '直播页提供「刷新直播源」（B站地址过期可手动换新）',
+  refreshLive.found && /已是最新|已更新/.test(refreshToast),
+  refreshToast || (refreshLive.found ? '(点击后无提示)' : '(未找到按钮)')
+);
+
 // B 站线路：按实际清晰度排序 + 不含别的游戏分区 + 提供官方原画出口
 const biliLines = await page.evaluate(() => {
   const cards = [...document.querySelectorAll('.card[data-kind="bili"]')];
