@@ -338,6 +338,10 @@
    * 判定为「陈旧」的两条依据（任一成立即陈旧）：
    *   1. 快照比现在老了 24 小时以上；
    *   2. 快照里有「开打超过 2 小时却仍是 0:0」的比赛 —— 说明这场的结果它根本没见过。
+   *
+   * 注意第 2 条的方向：只有**已经开打**且仍无比分的场次才算漏赛果；尚未开打的
+   * 场次（0:0 是正常的，包括「总决赛」「D8G1」这类还没定对阵的占位行）不能算，
+   * 否则一份新鲜快照会被自己的未来赛程判成陈旧。
    */
   function scheduleFreshness(meta, list) {
     const iso = (meta && meta.updatedAt) || '';
@@ -348,9 +352,10 @@
     (list || []).forEach((m) => {
       if (!m.date) return;
       const mt = new Date(String(m.date).replace(/-/g, '/')).getTime();
-      if (!isFinite(mt) || mt + 2 * 3600000 < now) return; // 没开打 / 刚开始
-      const sc = String(m.score || '0:0');
-      if (sc === '0:0' || sc === '0 : 0') missed++;
+      if (!isFinite(mt)) return;
+      if (mt + 2 * 3600000 >= now) return; // 还没开打 / 刚开始：0:0 是正常的
+      const sc = String(m.score == null ? '0:0' : m.score).replace(/\s+/g, '');
+      if (sc === '' || sc === '0:0') missed++; // 开打超过 2 小时却没比分 → 快照没见过这场结果
     });
     const stale = !isFinite(ageH) || ageH > 24 || missed > 0;
     let ageLabel = '未知';

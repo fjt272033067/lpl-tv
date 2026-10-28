@@ -661,10 +661,21 @@ function check(name, pass, detail) {
   const schFresh = await page.evaluate(() => ({
     label: (document.querySelector('.updated-at') || {}).textContent || '',
     eventMeta: (document.querySelector('.sched-event-meta') || {}).textContent || '',
+    staleBanner: !!document.querySelector('.sched-stale'),
+    staleTag: !!document.querySelector('.updated-at.stale'),
+    unconfirmed: document.querySelectorAll('.bracket-row.unconfirmed').length,
   }));
   console.log('   赛程新鲜度: ' + JSON.stringify(schFresh));
   check('赛程页显示快照时间与滞后时长', /赛程快照/.test(schFresh.label), schFresh.label);
   check('赛程页显示当前赛事信息（运行时直连）', /全球总决赛|赛事/.test(schFresh.eventMeta), schFresh.eventMeta);
+  // 新鲜快照绝不能被自己的「未来赛程」判成陈旧：快照里一定还有 0:0 的未开打场次
+  // （含「总决赛」「D8G1」这类未定对阵的占位行），若把它们算成「漏赛果」，
+  // 页面会对着刚烘焙的快照报滞后 —— 这条判据就是防那个方向写反的 bug。
+  check(
+    '新鲜快照不被误判为陈旧（未来 0:0 场次不计入漏赛果）',
+    !schFresh.staleBanner && !schFresh.staleTag && schFresh.unconfirmed === 0,
+    'banner=' + schFresh.staleBanner + ' tag=' + schFresh.staleTag + ' unconfirmed=' + schFresh.unconfirmed
+  );
 
   // 「今天起的赛程」速览：用户最先要知道的是今天有哪几场，而不是先读对阵图
   const soon = await page.evaluate(() => {
