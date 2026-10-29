@@ -1614,11 +1614,14 @@
     scheduleMeta: null,
     /** 数据实际来自本地烘焙快照还是远端数据源（用于界面如实标注） */
     origin: 'local',
+    /** 「上次核对上游的时间」（来自 version.json）——界面用它显示数据有多新 */
+    refreshedAt: '',
     async load() {
       if (this.catalog) return this.catalog;
       const r = await loadDataFile('catalog');
       if (!r.json) throw new Error('赛程数据加载失败');
       this.origin = r.origin;
+      this.refreshedAt = (r.ver && r.ver.updatedAt) || r.json.updatedAt || '';
       this.catalog = r.json;
       return this.catalog;
     },
@@ -2823,7 +2826,9 @@
       el('span', { text: '官方最新内容为运行时直连（实时）· 比赛回放目录随赛程快照更新' }),
       el('span', {
         class: 'updated-at',
-        text: '回放快照 ' + (cat.updatedAt || '—').replace('T', ' ').slice(0, 16),
+        // 用「上次核对上游的时间」（version.json），不用目录自身的 updatedAt ——
+        // 目录内容没变时它不会动，但数据其实刚核对过。
+        text: '回放快照 ' + fmtSnapshotTime(Repo.refreshedAt || cat.updatedAt),
       }),
     ]);
     view.appendChild(head);
@@ -2866,7 +2871,7 @@
       },
     });
     filters.appendChild(inp);
-    filters.appendChild(el('span', { class: 'count', text: '共 ' + filtered.length + ' 场 · 数据更新于 ' + (cat.updatedAt || '—') }));
+    filters.appendChild(el('span', { class: 'count', text: '共 ' + filtered.length + ' 场 · 数据更新于 ' + (Repo.refreshedAt || cat.updatedAt || '—') }));
     view.appendChild(filters);
 
     const grid = el('div', { class: 'grid' });
