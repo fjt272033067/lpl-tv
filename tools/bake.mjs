@@ -39,13 +39,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** 用 curl 请求（B 站风控按 TLS 指纹拦截，curl 的指纹可以通过）。
  *  用 execFileSync 而非 execSync：Windows 下 execSync 走 cmd.exe，Cookie 里的 ; & 会破坏命令。
- *  注意 B 站部分接口（弹幕 XML）会带 Content-Encoding: deflate，需要解压。 */
+ *  注意 B 站部分接口（弹幕 XML）会带 Content-Encoding: deflate，需要解压。
+ *  curl 的可执行名在 Windows 上是 curl.exe、Linux/macOS 上是 curl —— CI 跑在
+ *  Ubuntu 上，写死 curl.exe 会让 B 站侧全线静默失败（拿不到任何流地址）。 */
+const CURL = process.platform === 'win32' ? 'curl.exe' : 'curl';
 function curlBuf(url, headers = [], timeout = 30) {
   const args = ['-s', '--max-time', String(timeout), '-A', UA];
   headers.forEach((h) => args.push('-H', h));
   args.push(url);
   try {
-    return execFileSync('curl.exe', args, {
+    return execFileSync(CURL, args, {
       encoding: 'buffer',
       maxBuffer: 256 * 1024 * 1024,
       windowsHide: true,
@@ -367,6 +370,33 @@ function liveSigOf(file) {
   } catch (e) {
     return '';
   }
+}
+
+/**
+ * 内容没变就沿用上一次的 updatedAt。
+ *
+ * 为什么需要：CI 每 20 分钟提交一次数据。如果 updatedAt 每次都变，schedule.json
+ * （390KB）/ catalog.json（368KB）就会每次产生一个全新的大 blob —— 仓库会以
+ * 每天十几 MB 的速度膨胀，克隆越来越慢。内容没变时戳不变，才能让
+ * 「数据是否真的变了」和「仓库是否产生新提交」对齐。
+ *
+ * 代价是 updatedAt 变成「内容最后变化的时间」而不是「上次核对上游的时间」，
+ * 后者由 version.json 单独记录（那个文件每次都会变，但只有几百字节）。
+ */
+function stableStamp(file, body) {
+  const sig = JSON.stringify(body);
+  let prev = null;
+  try {
+    prev = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    /* 没有旧文件或读坏了 → 用新时间戳 */
+  }
+  if (prev && typeof prev === 'object') {
+    const prevStamp = prev.updatedAt || '';
+    delete prev.updatedAt;
+    if (JSON.stringify(prev) === sig && prevStamp) return prevStamp;
+  }
+  return new Date().toISOString();
 }
 
 /** B 站视频时长字符串 → 秒（"569:8" → 34148；"1:05:23" → 3923） */
@@ -729,15 +759,18 @@ async function main() {
   }
 
   // 赛程（含 B 站源映射）
-  fs.writeFileSync(
-    schedulePath,
-    JSON.stringify({
-      updatedAt: new Date().toISOString(),
-      source: '腾讯 LPL 公开赛程接口 (lpl.qq.com)',
-      total: schedule.length,
-      matches: schedule,
-    })
-  );
+  const scheduleBody = {
+    source: '腾讯 LPL 公开赛程接口 (lpl.qq.com)',
+    total: schedule.length,
+    matches: schedule,
+  };
+  const scheduleObj = {
+    updatedAt: stableStamp(schedulePath, scheduleBody),
+    source: scheduleBody.source,
+    total: scheduleBody.total,
+    matches: scheduleBody.matches,
+  };
+  fs.writeFileSync(schedulePath, JSON.stringify(scheduleObj));
   console.log(`      赛程已写入 schedule.json（含 ${schedule.filter((m) => m.bvid).length} 场 B 站源）`);
 
   // 2d. 取 CID
@@ -873,19 +906,28 @@ async function main() {
     await sleep(200);
   }
   liveList.sort((a, b) => (b.live ? 1 : 0) - (a.live ? 1 : 0));
-  fs.writeFileSync(
-    livePath,
-    JSON.stringify(
-      {
-        updatedAt: new Date().toISOString(),
-        currentMatch: '',
-        rooms: liveList,
-        externalRooms: EXTERNAL_ROOMS,
-      },
-      null,
-      1
-    )
-  );
+  // 直播源每次都必须换新时间戳：B 站流地址有效期约 60 分钟，
+  // 而且这份文件的 updatedAt 就是「数据上次刷新的时间」的信号。
+  const liveStamp = new Date().toISOString();
+  // 兜底：一个房间都没抓到（B 站对数据中心 IP 有风控，CI 上很常见）时，
+  // 不要用空列表覆盖旧文件 —— 留着旧房间，站点至少还能给出「官方直播间 ↗」出口。
+  if (!liveList.length && fs.existsSync(livePath)) {
+    console.log('      未抓到任何直播间（可能被风控），保留上一版 liverooms.json');
+  } else {
+    fs.writeFileSync(
+      livePath,
+      JSON.stringify(
+        {
+          updatedAt: liveStamp,
+          currentMatch: '',
+          rooms: liveList,
+          externalRooms: EXTERNAL_ROOMS,
+        },
+        null,
+        1
+      )
+    );
+  }
   // 直播间签名：忽略具体流地址（每次刷新都会变），只看房间集合与开播状态
   const liveSig = liveSigOf(livePath);
   const anyLive = liveList.some((r) => r.live && r.stream);
@@ -917,14 +959,39 @@ async function main() {
     biliPart: m.biliTitle || '',
     dmCount: m.dmCount || 0,
   }));
-  const catalog = {
-    updatedAt: new Date().toISOString(),
+  const catalogBody = {
     source: '腾讯 LPL 公开赛程接口 (lpl.qq.com)',
     total: clean.length,
     withDanmaku: clean.filter((m) => m.cid).length,
     matches: clean,
   };
+  const catalog = {
+    updatedAt: stableStamp(catalogPath, catalogBody),
+    source: catalogBody.source,
+    total: catalogBody.total,
+    withDanmaku: catalogBody.withDanmaku,
+    matches: catalogBody.matches,
+  };
   fs.writeFileSync(path.join(DATA, 'catalog.json'), JSON.stringify(catalog));
+
+  // 版本文件：记录「上次核对上游的时间」与每份数据的「内容最后变化时间」。
+  // 站点用它判断新鲜度（而不是用 schedule.json 的内容时间戳），
+  // 也用它决定该取本地还是远端的那份数据。
+  let liveActual = liveStamp;
+  try {
+    liveActual = JSON.parse(fs.readFileSync(livePath, 'utf8')).updatedAt || liveStamp;
+  } catch (e) {
+    /* 读不到就用本次的时间戳 */
+  }
+  const versionObj = {
+    updatedAt: new Date().toISOString(),
+    files: {
+      schedule: scheduleObj.updatedAt,
+      catalog: catalog.updatedAt,
+      liverooms: liveActual,
+    },
+  };
+  fs.writeFileSync(path.join(DATA, 'version.json'), JSON.stringify(versionObj));
 
   const catSize = fs.statSync(path.join(DATA, 'catalog.json')).size;
   const dmFiles = fs.readdirSync(DM_DIR).filter((f) => f.endsWith('.json'));

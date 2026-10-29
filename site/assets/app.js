@@ -254,6 +254,47 @@
     return rt > lt ? remote : local;
   }
 
+  /**
+   * 读取一份数据（本地 / 远端取内容更新的那份）。
+   *
+   * 先读版本信息 version.json（很小），它记着：
+   *   · updatedAt      —— 「上次核对上游的时间」，用于判断数据新不新；
+   *   · files[名字]     —— 每份数据「内容最后变化的时间」。
+   * 用 files[名字] 决定取哪边，并把内容时间戳拼进 URL：
+   *   · 内容没变 → URL 不变 → 命中 CDN 缓存，不多下载；
+   *   · 内容变了 → URL 变了 → 必然取到新文件（绕开 CDN 的长缓存）。
+   * 远端拿不到就干净回退本地，站点不会因为外部依赖打不开。
+   */
+  async function loadDataFile(name, force) {
+    const bust = force ? '?t=' + Date.now() : '';
+    const localVer = await fetchJson('data/version.json' + bust, 0);
+    const remoteVer = REMOTE_DATA_BASE ? await fetchJson(REMOTE_DATA_BASE + '/version.json' + bust, 8000) : null;
+    const ver = pickNewer(localVer, remoteVer); // 「刷新时间」取新的那份
+    const lv = localVer && localVer.files ? localVer.files[name] : '';
+    const rv = remoteVer && remoteVer.files ? remoteVer.files[name] : '';
+
+    // 两边都有版本信息 → 只拉需要的那一份
+    if (lv && rv) {
+      if (Date.parse(rv) > Date.parse(lv)) {
+        const j = await fetchJson(REMOTE_DATA_BASE + '/' + name + '.json?v=' + encodeURIComponent(rv), 8000);
+        if (j) return { json: j, origin: 'remote', ver };
+      }
+      const local = await fetchJson('data/' + name + '.json' + bust, 0);
+      if (local) return { json: local, origin: 'local', ver };
+      const j = await fetchJson(REMOTE_DATA_BASE + '/' + name + '.json' + bust, 8000);
+      if (j) return { json: j, origin: 'remote', ver };
+      return { json: null, origin: 'local', ver };
+    }
+
+    // 老产物（没有版本信息）：两份都拉，按文件自己的 updatedAt 取新的
+    const local = await fetchJson('data/' + name + '.json' + bust, 0);
+    if (!REMOTE_DATA_BASE) return { json: local, origin: 'local', ver };
+    const remote = await fetchJson(REMOTE_DATA_BASE + '/' + name + '.json' + bust, 8000);
+    const picked = pickNewer(local, remote);
+    if (picked) return { json: picked, origin: picked === remote ? 'remote' : 'local', ver };
+    return { json: null, origin: 'local', ver };
+  }
+
   /* 运行时数据：队伍 logo 与简称（按简称 / ID 双索引） */
   let teamLogos = null;
   let teamById = null;
@@ -405,7 +446,9 @@
    * 否则一份新鲜快照会被自己的未来赛程判成陈旧。
    */
   function scheduleFreshness(meta, list) {
-    const iso = (meta && meta.updatedAt) || '';
+    // 「刷新时间」优先用 version.json 的 updatedAt（上次从上游核对的时间）；
+    // 老产物没有版本文件时退回 schedule.json 自己的 updatedAt。
+    const iso = (meta && (meta.refreshedAt || meta.updatedAt)) || '';
     const ts = Date.parse(iso);
     const ageH = isFinite(ts) ? (Date.now() - ts) / 3600000 : NaN;
     let missed = 0;
@@ -1573,38 +1616,26 @@
     origin: 'local',
     async load() {
       if (this.catalog) return this.catalog;
-      const res = await fetch('data/catalog.json', { cache: 'no-cache' });
-      if (!res.ok) throw new Error('赛程数据加载失败');
-      const local = await res.json();
-      let remote = null;
-      if (REMOTE_DATA_BASE) remote = await fetchJson(REMOTE_DATA_BASE + '/catalog.json', 8000);
-      const picked = pickNewer(local, remote);
-      this.origin = picked === remote ? 'remote' : 'local';
-      this.catalog = picked;
+      const r = await loadDataFile('catalog');
+      if (!r.json) throw new Error('赛程数据加载失败');
+      this.origin = r.origin;
+      this.catalog = r.json;
       return this.catalog;
     },
     /** 完整赛程（含未开赛 / 未发布的比赛），用于对阵图 */
     async loadSchedule(force) {
       if (this.schedule && !force) return this.schedule;
-      // force 时加时间戳绕过 CDN / 浏览器缓存，确保拿到线上最新的一份快照
-      const bust = force ? '?t=' + Date.now() : '';
-      let local = null;
-      try {
-        const res = await fetch('data/schedule.json' + bust, { cache: 'no-cache' });
-        if (res.ok) local = await res.json();
-      } catch (e) {
-        /* 落到远端或 catalog 回退 */
-      }
-      let remote = null;
-      if (REMOTE_DATA_BASE) remote = await fetchJson(REMOTE_DATA_BASE + '/schedule.json' + bust, 8000);
-      const picked = pickNewer(local, remote);
-      if (picked && Array.isArray(picked.matches)) {
-        this.schedule = picked.matches;
+      const r = await loadDataFile('schedule', force);
+      if (r.json && Array.isArray(r.json.matches)) {
+        this.schedule = r.json.matches;
         this.scheduleMeta = {
-          updatedAt: picked.updatedAt || '',
-          total: picked.total || picked.matches.length,
-          source: picked.source || '',
-          origin: picked === remote ? 'remote' : 'local',
+          updatedAt: r.json.updatedAt || '',
+          // 「刷新时间」= 上次从上游核对的时间（version.json），
+          // 用它判断新鲜度；内容没变时它照样是新的（数据确实刚核对过）。
+          refreshedAt: (r.ver && r.ver.updatedAt) || r.json.updatedAt || '',
+          total: r.json.total || r.json.matches.length,
+          source: r.json.source || '',
+          origin: r.origin,
         };
         return this.schedule;
       }
@@ -2668,16 +2699,8 @@
   let liveRoomsUpdatedAt = '';
   async function ensureBiliRooms(force) {
     if (biliRooms.length && !force) return biliRooms;
-    let local = null;
-    try {
-      const res = await fetch('data/liverooms.json' + (force ? '?t=' + Date.now() : ''), { cache: 'no-cache' });
-      if (res.ok) local = await res.json();
-    } catch (e) {
-      /* 落到远端回退 */
-    }
-    let remote = null;
-    if (REMOTE_DATA_BASE) remote = await fetchJson(REMOTE_DATA_BASE + '/liverooms.json' + (force ? '?t=' + Date.now() : ''), 8000);
-    const j = pickNewer(local, remote);
+    const r = await loadDataFile('liverooms', force);
+    const j = r.json;
     if (j) {
       // 兼容两种格式：旧版是数组，新版是 {rooms:[...], currentMatch, externalRooms, txCovers}
       biliRooms = Array.isArray(j) ? j : (j.rooms || []);

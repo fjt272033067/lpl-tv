@@ -21,7 +21,9 @@ function curlBuf(url, headers = []) {
   headers.forEach((h) => args.push('-H', h));
   args.push(url);
   try {
-    return execFileSync('curl.exe', args, { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+    // curl 的可执行名：Windows 是 curl.exe，Linux/macOS 是 curl
+    const bin = process.platform === 'win32' ? 'curl.exe' : 'curl';
+    return execFileSync(bin, args, { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
   } catch (e) {
     return Buffer.alloc(0);
   }

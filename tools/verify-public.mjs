@@ -416,6 +416,13 @@ console.log('   赛程新鲜度: ' + JSON.stringify(schFresh));
 check('赛程页显示快照时间与滞后时长', /赛程快照/.test(schFresh.label), schFresh.label);
 check('赛程页显示当前赛事信息（运行时直连）', /全球总决赛|赛事/.test(schFresh.eventMeta), schFresh.eventMeta);
 check('线上赛程快照是新鲜的（无陈旧警示）', !schFresh.banner && !schFresh.stale, schFresh.label);
+// 新鲜度取自 version.json（= 上次核对上游的时间）；线上必须有这个文件
+const onlineVer = await (await fetch(URL + '/data/version.json?t=' + Date.now())).json().catch(() => null);
+check(
+  '线上数据带 version.json（新鲜度按「上次核对上游」判定）',
+  !!onlineVer && !!onlineVer.updatedAt,
+  onlineVer ? '刷新于 ' + onlineVer.updatedAt : '缺失'
+);
 
 // 赛程行点击看录播：腾讯源 → 站内播放页；B 站源 → 新标签打开 B 站视频
 const vodRows = await page.evaluate(() => ({
@@ -448,7 +455,7 @@ await page.goto(pageUrl('#/schedule'), { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(3000);
 const biliClick = await page.evaluate(async () => {
   const row = document.querySelector('.bracket-row.bili-only');
-  if (!row) return { err: 'no bili row' };
+  if (!row) return { noRow: true };
   const orig = window.open;
   let captured = '';
   window.open = (u) => {
@@ -460,21 +467,70 @@ const biliClick = await page.evaluate(async () => {
   window.open = orig;
   return { captured };
 });
-console.log('   B站行跳转: ' + JSON.stringify(biliClick));
+// 赛程里不一定有 B 站行（腾讯发布官方录像后赛程行改用腾讯源）→ 改验播放页备用出口
+let biliAlt = null;
+if (biliClick.noRow) {
+  await page.goto(pageUrl('#/vod'), { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+  biliAlt = await page.evaluate(async () => {
+    const card = document.querySelector('.card .src-tag.bili');
+    const anyCard = document.querySelector('.card[data-id]');
+    if (!card && !anyCard) return { err: 'no card' };
+    // 先找一个带 B 站同源标注的卡片，进入播放页点备用出口
+    const cards = [...document.querySelectorAll('.card[data-id]')];
+    const biliCard = cards.find((c) => c.querySelector('.src-tag.bili')) || cards[0];
+    if (!biliCard) return { err: 'no card' };
+    const id = biliCard.getAttribute('data-id');
+    location.hash = '#/watch/' + id;
+    await new Promise((r) => setTimeout(r, 3500));
+    const btn = document.querySelector('.watch-alt button');
+    if (!btn) return { err: 'no watch-alt button' };
+    const orig = window.open;
+    let captured = '';
+    window.open = (u) => {
+      captured = String(u || '');
+      return null;
+    };
+    btn.click();
+    await new Promise((r) => setTimeout(r, 300));
+    window.open = orig;
+    return { captured, label: btn.textContent.trim() };
+  });
+}
+console.log('   B站源跳转: ' + JSON.stringify(biliClick.noRow ? biliAlt : biliClick));
 check(
-  '点击赛程行（B站源）打开 B 站视频',
-  !!biliClick.captured && /bilibili\.com\/video\//.test(biliClick.captured),
-  biliClick.captured ? biliClick.captured.slice(0, 70) : biliClick.err || '未打开'
+  'B 站录像通路可用（赛程行或播放页备用出口）',
+  biliClick.noRow
+    ? !!biliAlt && !!biliAlt.captured && /bilibili\.com\/(video|search)/.test(biliAlt.captured)
+    : !!biliClick.captured && /bilibili\.com\/video\//.test(biliClick.captured),
+  biliClick.noRow
+    ? (biliAlt ? biliAlt.captured.slice(0, 70) + ' | ' + (biliAlt.label || '') : '未找到备用出口')
+    : biliClick.captured
+    ? biliClick.captured.slice(0, 70)
+    : biliClick.err || '未打开'
 );
 await page.screenshot({ path: 'data/ui-smoke/07-schedule.png' });
 
 // 陈旧快照的防错：把线上的 schedule.json 换成一份旧快照，页面必须提示并把
 // 未开打的对阵标成「待确认」（而不是继续显示可能过时的队名）。
+// 新鲜度取自 version.json（= 上次核对上游的时间），所以 version.json 也要一起换成旧的。
 const stalePage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 await stalePage.route('**/data/schedule.json*', async (route) => {
   const res = await route.fetch();
   const body = await res.json();
   body.updatedAt = new Date(Date.now() - 5 * 86400000).toISOString();
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json; charset=utf-8',
+    body: JSON.stringify(body),
+  });
+});
+await stalePage.route('**/data/version.json*', async (route) => {
+  const res = await route.fetch();
+  const body = await res.json();
+  const old = new Date(Date.now() - 5 * 86400000).toISOString();
+  body.updatedAt = old;
+  if (body.files) body.files = { schedule: old, catalog: old, liverooms: old };
   await route.fulfill({
     status: 200,
     contentType: 'application/json; charset=utf-8',

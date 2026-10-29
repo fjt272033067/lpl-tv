@@ -15,8 +15,18 @@
 # 前提：
 #   1. 仓库必须是公开仓库（站点要匿名读取 CDN 上的 JSON）；
 #   2. 站点部署一次，并把 <meta name="lpl-tv-data-base"> 指向本仓库的 data 目录，
-#      例如 https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/site/data
-#      （国内访问 raw.githubusercontent.com 不稳，jsDelivr 更合适）。
+#      例如 https://raw.githubusercontent.com/<owner>/<repo>/main/site/data
+#
+# 关于选哪个 CDN（实测 2026-10-29）：
+#   · raw.githubusercontent.com —— Cache-Control: max-age=300（5 分钟）+ ACAO: *，适合这种
+#     20 分钟一次的数据更新；
+#   · cdn.jsdelivr.net —— s-maxage=43200（**12 小时** CDN 缓存）！分支 URL 下的文件
+#     会被缓存半天，看起来就像「数据没更新」。除非用 commit SHA 做版本号，否则别用。
+#
+# 关于仓库体积：
+#   bake.mjs 只在「内容真的变了」时才更新 schedule/catalog 的 updatedAt，
+#   所以每轮提交只有 version.json（几百字节）+ liverooms.json（8KB），
+#   仓库不会每 20 分钟膨胀一次。
 # =====================================================================
 name: refresh-data
 
@@ -58,7 +68,9 @@ jobs:
       # 装它会白白多花几分钟。
 
       - name: 重建数据（赛程 / 录像 / 弹幕 / 直播间）
-        run: node tools/bake.mjs --vods=${{ github.event.inputs.vods || '160' }}
+        run: |
+          set -o pipefail
+          node tools/bake.mjs --vods=${{ github.event.inputs.vods || '160' }} 2>&1 | tee bake.out.txt
 
       - name: 提交数据
         run: |
@@ -69,6 +81,8 @@ jobs:
             echo "数据无实质变化，跳过提交"
           else
             git commit -m "data: 刷新赛事数据快照 $(date -u +'%Y-%m-%d %H:%M UTC')"
+            # 期间如果有人推了新提交，先 rebase 再推（只动数据文件，冲突概率极低）
+            git pull --rebase origin "${{ github.ref_name }}" || true
             git push
             echo "已提交，站点下次轮询（约 5 分钟内）自动取到新数据"
           fi

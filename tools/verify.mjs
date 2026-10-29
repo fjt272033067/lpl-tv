@@ -713,6 +713,29 @@ function check(name, pass, detail) {
     'banner=' + schFresh.staleBanner + ' tag=' + schFresh.staleTag + ' unconfirmed=' + schFresh.unconfirmed
   );
 
+  // 新鲜度必须按 version.json 的「上次核对上游的时间」判定。
+  // 内容没变时 schedule.json 的 updatedAt 不会动（否则仓库每轮都产生新的大 blob），
+  // 但数据其实刚核对过 —— 所以显示的时间要来自 version.json。
+  const verFile = path.join(SITE, 'data', 'version.json');
+  const verOk = fs.existsSync(verFile);
+  let verDay = '';
+  if (verOk) {
+    const v = JSON.parse(fs.readFileSync(verFile, 'utf8'));
+    const d = new Date(v.updatedAt);
+    verDay =
+      d.getFullYear() +
+      '-' +
+      String(d.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(d.getDate()).padStart(2, '0');
+  }
+  check('数据目录带 version.json（新鲜度按「上次核对上游」判定）', verOk, verOk ? verDay : '缺失');
+  check(
+    '赛程页显示的快照时间来自 version.json（不是内容时间戳）',
+    verOk && schFresh.label.indexOf(verDay) >= 0,
+    schFresh.label
+  );
+
   // 「今天起的赛程」速览：用户最先要知道的是今天有哪几场，而不是先读对阵图
   const soon = await page.evaluate(() => {
     const rows = [...document.querySelectorAll('.soon-row')];
@@ -765,11 +788,15 @@ function check(name, pass, detail) {
   // 点击 B 站源行 → 必须打开 B 站视频页
   // 不用「监听 popup」的方式：在页面内临时替换 window.open 直接捕获目标 URL，
   // 既避免真的拉起一个 B 站页面（浪费带宽），也能精确断言打开的是视频页。
+  //
+  // 注意：赛程里**不一定**有 B 站行 —— 腾讯一旦发布了这场的官方录像，
+  // 赛程行就改用腾讯源（官方源优先）。那种情况下改验播放页的「B站同源录像 ↗」
+  // 备用出口，保证「B 站录像这条路仍然通」这件事始终被覆盖。
   await page.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3500);
   const biliClick = await page.evaluate(async () => {
     const row = document.querySelector('.bracket-row.bili-only');
-    if (!row) return { err: 'no bili row' };
+    if (!row) return { noRow: true };
     const orig = window.open;
     let captured = '';
     window.open = (u) => {
@@ -781,11 +808,41 @@ function check(name, pass, detail) {
     window.open = orig;
     return { captured };
   });
-  console.log('   B站行跳转: ' + JSON.stringify(biliClick));
+  let biliAlt = null;
+  if (biliClick.noRow) {
+    // 赛程里没有 B 站行 → 到播放页验备用出口
+    const cat = JSON.parse(fs.readFileSync(path.join(SITE, 'data', 'catalog.json'), 'utf8'));
+    const withBvid = (cat.matches || []).find((m) => m.bvid && m.id);
+    if (withBvid) {
+      await page.goto(base + '/#/watch/' + withBvid.id, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(3000);
+      biliAlt = await page.evaluate(async () => {
+        const btn = document.querySelector('.watch-alt button');
+        if (!btn) return { err: 'no watch-alt button' };
+        const orig = window.open;
+        let captured = '';
+        window.open = (u) => {
+          captured = String(u || '');
+          return null;
+        };
+        btn.click();
+        await new Promise((r) => setTimeout(r, 300));
+        window.open = orig;
+        return { captured, label: btn.textContent.trim() };
+      });
+    }
+  }
+  console.log('   B站源跳转: ' + JSON.stringify(biliClick.noRow ? biliAlt : biliClick));
   check(
-    '点击赛程行（B站源）打开 B 站视频',
-    !!biliClick.captured && /bilibili\.com\/video\//.test(biliClick.captured),
-    biliClick.captured ? biliClick.captured.slice(0, 70) : biliClick.err || '未打开'
+    'B 站录像通路可用（赛程行或播放页备用出口）',
+    biliClick.noRow
+      ? !!biliAlt && !!biliAlt.captured && /bilibili\.com\/(video|search)/.test(biliAlt.captured)
+      : !!biliClick.captured && /bilibili\.com\/video\//.test(biliClick.captured),
+    biliClick.noRow
+      ? (biliAlt ? biliAlt.captured.slice(0, 70) + ' | ' + (biliAlt.label || '') : '未找到备用出口')
+      : biliClick.captured
+      ? biliClick.captured.slice(0, 70)
+      : biliClick.err || '未打开'
   );
 
   await page.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
@@ -839,11 +896,26 @@ function check(name, pass, detail) {
   // 把 schedule.json 换成一份「5 天前的快照」，页面必须：
   //   ① 明确提示快照滞后；② 未开打的对阵标成「待确认」（不显示可能过时的队名）；
   //   ③ 给出官方对阵图出口。
+  // 注意：现在新鲜度取自 version.json（=「上次核对上游的时间」），
+  // 所以要模拟陈旧，必须把 version.json 一起换成旧的 —— 只改 schedule.json
+  // 模拟的是「数据文件旧但核对记录新」，现实中不会出现。
   const stalePage = await ctx.newPage();
   await stalePage.route('**/data/schedule.json*', async (route) => {
     const res = await route.fetch();
     const body = await res.json();
     body.updatedAt = new Date(Date.now() - 5 * 86400000).toISOString();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify(body),
+    });
+  });
+  await stalePage.route('**/data/version.json*', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const old = new Date(Date.now() - 5 * 86400000).toISOString();
+    body.updatedAt = old;
+    if (body.files) body.files = { schedule: old, catalog: old, liverooms: old };
     await route.fulfill({
       status: 200,
       contentType: 'application/json; charset=utf-8',
@@ -873,8 +945,11 @@ function check(name, pass, detail) {
   const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lpltv-remote-'));
   const localSched = JSON.parse(fs.readFileSync(path.join(SITE, 'data', 'schedule.json'), 'utf8'));
   const localCat = JSON.parse(fs.readFileSync(path.join(SITE, 'data', 'catalog.json'), 'utf8'));
-  // 远端必须比本地新（用「本地 + 1 小时」保证无论何时跑都比本地新）
-  const remoteIso = new Date((Date.parse(localSched.updatedAt) || Date.now()) + 3600000).toISOString();
+  const localVer = fs.existsSync(path.join(SITE, 'data', 'version.json'))
+    ? JSON.parse(fs.readFileSync(path.join(SITE, 'data', 'version.json'), 'utf8'))
+    : null;
+  // 远端必须比本地新（刷新时间 + 内容时间戳都要更新，否则站点会继续用本地那份）
+  const remoteIso = new Date(Date.now() + 30 * 60 * 1000).toISOString();
   const remoteMatches = [
     {
       id: '',
@@ -897,8 +972,20 @@ function check(name, pass, detail) {
     },
   ];
   fs.writeFileSync(
+    path.join(remoteDir, 'version.json'),
+    JSON.stringify({
+      updatedAt: remoteIso,
+      files: { schedule: remoteIso, catalog: remoteIso, liverooms: remoteIso },
+    })
+  );
+  fs.writeFileSync(
     path.join(remoteDir, 'schedule.json'),
-    JSON.stringify({ updatedAt: remoteIso, source: '远端测试源', total: remoteMatches.length, matches: remoteMatches })
+    JSON.stringify({
+      updatedAt: remoteIso,
+      source: '远端测试源',
+      total: remoteMatches.length,
+      matches: remoteMatches,
+    })
   );
   fs.writeFileSync(
     path.join(remoteDir, 'catalog.json'),

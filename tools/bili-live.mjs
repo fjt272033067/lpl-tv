@@ -24,7 +24,8 @@ function curlBuf(url, headers = [], timeout = 25) {
   headers.forEach((h) => args.push('-H', h));
   args.push(url);
   try {
-    return execFileSync('curl.exe', args, {
+    // curl 的可执行名：Windows 是 curl.exe，Linux/macOS 是 curl
+    return execFileSync(process.platform === 'win32' ? 'curl.exe' : 'curl', args, {
       encoding: 'buffer',
       maxBuffer: 64 * 1024 * 1024,
       windowsHide: true,

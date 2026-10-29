@@ -206,12 +206,12 @@ node tools/bake.mjs --vods=160 --no-danmaku   # 只刷赛程，跳过弹幕
 所以「数据自动更新」= 必须有一个会自己跑的构建环境。站点侧为此留了一个口子：
 
 **远端数据源**（`site/index.html` 的 `<meta name="lpl-tv-data-base">`）
-站点把**本地烘焙快照**和**远端数据源**两份都读回来，**按 `updatedAt` 取更新的那份**；
+站点把**本地烘焙快照**和**远端数据源**两份都读回来，取**内容更新**的那份；
 远端不可用时自动回退本地快照，站点不会因为外部依赖而打不开。
 默认留空 = 只用本地快照（零额外请求，行为与从前完全一致）。
 
 ```bash
-node tools/set-data-base.mjs https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/site/data
+node tools/set-data-base.mjs https://raw.githubusercontent.com/<owner>/<repo>/main/site/data
 # 不带参数 = 关闭远端数据源
 ```
 
@@ -223,6 +223,35 @@ node tools/set-data-base.mjs https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/sit
 | 站点前端改动 | 人工重新部署 `site/` | 立即 |
 
 也就是说**数据日更不需要重新部署站点** —— 这是「赛程像录像一样自动更新」的关键。
+
+### 三份数据文件各管一件事
+
+| 文件 | 内容 | 多久变一次 |
+|---|---|---|
+| `data/version.json` | 「上次核对上游的时间」+ 每份数据的「内容最后变化时间」 | 每轮都变（几百字节） |
+| `data/schedule.json` | 完整赛程（含未开打的对阵） | **只在内容真的变了才变** |
+| `data/catalog.json` | 录像目录（B 站源 / 弹幕映射） | 同上 |
+| `data/liverooms.json` | 直播间与流地址（B 站地址约 60 分钟过期） | 每轮都变（8KB） |
+
+站点用 `version.json` 判断新鲜度（这就是「赛程快照 8 分钟前」的来源），
+并按「内容时间戳」决定取本地还是远端那份、把内容时间戳拼进 URL 当缓存键
+（内容没变 → URL 不变 → 命中 CDN 缓存；内容变了 → URL 变 → 必然取到新文件）。
+
+> 为什么 `schedule.json` / `catalog.json` 的 `updatedAt` 要「内容没变就不动」：
+> CI 每 20 分钟提交一次，如果时间戳每次都变，这两个文件（390KB + 368KB）
+> 每次都会产生全新的大 blob，仓库会以每天十几 MB 的速度膨胀。
+
+### 选哪个 CDN（实测 2026-10-29）
+
+| 托管 | 缓存策略 | 结论 |
+|---|---|---|
+| `raw.githubusercontent.com` | `Cache-Control: max-age=300` + `ACAO: *` | ✅ 20 分钟一次的数据更新用这个 |
+| `cdn.jsdelivr.net` / `fastly.jsdelivr.net` | `s-maxage=43200`（**12 小时** CDN 缓存） | ❌ 分支 URL 下会缓存半天，看起来就像「数据没更新」 |
+| `statically.io` | `max-age=0, must-revalidate` + `ACAO: *` | 可用（路径格式待验证） |
+
+> 国内访问 `raw.githubusercontent.com` 可能慢。站点对远端请求有 8 秒超时、
+> 拿不到就立刻回退本地快照，不会卡住首屏；也可以改用 `statically.io` 之类
+> 境内可达的静态托管，只要响应带 `ACAO: *` 就行。
 
 ### 发布流程（改前端时）
 
@@ -240,19 +269,36 @@ CDN 必然回源取新文件，且 `index.html` 与脚本的戳同源，不会�
 
 ### 启用步骤
 
-1. 把本仓库推到一个**公开仓库**（站点要匿名读 CDN 上的 JSON）。
-2. 打开仓库的 Actions → 启用 `refresh-data` 工作流（手动跑一次，确认能提交 `site/data`）。
-3. 设远端基址并**重新部署一次**站点：
+**第 1 步：建一个公开仓库**（GitHub 上 New repository，**不要**勾 README/.gitignore/LICENSE，
+否则会和本地历史冲突），然后在本地推上去：
 
-   ```bash
-   node tools/set-data-base.mjs https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/site/data
-   # 然后部署 site/ 目录
-   ```
+```bash
+cd E:\M3.1-Flash工作室\lpl-tv
+git remote add origin https://github.com/<你的用户名>/<仓库名>.git
+git push -u origin main
+```
 
-4. 之后数据由 CI 自己维护，站点不再需要人工部署。
+（推送约 17MB —— `site/data/dm/` 里是 187 个弹幕文件，属正常。Git 会提示输入
+GitHub 用户名与 Personal Access Token，**不要把 token 发给我**，在你自己终端里输入即可。）
 
-> 国内访问 `raw.githubusercontent.com` 不稳，优先用 jsDelivr（`cdn.jsdelivr.net`，带 `ACAO: *`）。
-> 站点对远端请求有 8 秒超时，CDN 挂了会立刻回退本地快照，不会卡住首屏。
+**第 2 步：启用 Actions**
+仓库 → Actions → 左侧 `refresh-data` → 提示「I understand, enable these actions」→ 启用；
+再点 `Run workflow` 手动跑一次，确认它能提交 `site/data`（绿色对勾）。
+
+**第 3 步：把站点指向这个仓库，并重新部署一次**
+
+```bash
+node tools/set-data-base.mjs https://raw.githubusercontent.com/<你的用户名>/<仓库名>/main/site/data
+node tools/stamp-assets.mjs
+# 然后部署 site/ 目录
+```
+
+**第 4 步**：之后数据由 CI 自己维护（每 20 分钟），**站点不再需要人工部署**。
+
+> CI 跑在 Ubuntu 上：烘焙脚本里调 curl 的地方已改成按平台取 `curl` / `curl.exe`，
+> 否则 B 站侧会全线静默失败（拿不到任何流地址）。
+> 另有一条兜底：一个直播间都没抓到时**不覆盖**旧的 `liverooms.json`，
+> 站点至少还能给出「官方直播间 ↗」出口。
 
 ## 端到端验收
 
