@@ -320,6 +320,7 @@
     reason: '',      // 失败原因（中文，直接显示）
     tried: 0,        // 试了几个基址
     updatedAt: '',   // 生效数据的 updatedAt
+    liveUpdatedAt: '', // 直播源数据（liverooms）的时间戳
     checkedAt: 0,
   };
   function setDataStatus(patch) {
@@ -375,25 +376,38 @@
       box.className = 'data-channel';
       document.body.appendChild(box);
     }
-    if (DataStatus.state !== 'failed') {
+    // 两种情况都要说清楚：
+    //  ① 远端通道探不通 —— 数据可能停在很久以前；
+    //  ② 通道是通的，但**直播源数据本身已经太旧**（B 站流地址约 60 分钟过期）——
+    //     这时「暂无直播信号」多半不是赛事没开，而是快照过期，不该让它背锅。
+    const channelBad = DataStatus.state === 'failed';
+    const liveStamp = DataStatus.liveUpdatedAt;
+    const liveAge = liveStamp ? Date.now() - Date.parse(liveStamp) : 0;
+    const liveStale = !!liveStamp && liveAge > DATA_MAX_AGE.liverooms;
+    if (!channelBad && !liveStale) {
       box.style.display = 'none';
       box.innerHTML = '';
       return;
     }
     box.style.display = '';
     box.innerHTML = '';
-    box.appendChild(
-      el('span', { class: 'dc-icon', text: '!' })
-    );
+    box.appendChild(el('span', { class: 'dc-icon', text: '!' }));
+    const ageTxt = liveStamp ? channelAgeLabel(liveStamp) : '时间未知';
     box.appendChild(
       el('div', { class: 'dc-text' }, [
-        el('b', { text: '数据通道暂时不可达（已尝试 ' + (DataStatus.tried || REMOTE_DATA_BASES.length) + ' 个远端镜像）' }),
+        el('b', {
+          text: channelBad
+            ? '数据通道暂时不可达（已尝试 ' + (DataStatus.tried || REMOTE_DATA_BASES.length) + ' 个远端镜像）'
+            : '直播源快照已过期（' + ageTxt + '）',
+        }),
         el('p', {
-          text:
-            '当前显示的是 ' +
-            channelAgeLabel(DataStatus.updatedAt) +
-            '的本地快照。腾讯的直播信号仍会实时更新，但 B 站线路与清晰度依赖远端快照，' +
-            '流地址可能已失效。可点「重新拉取」重试。',
+          text: channelBad
+            ? '当前显示的是 ' +
+              ageTxt +
+              '的本地快照。腾讯的直播信号仍会实时更新，但 B 站线路与清晰度依赖远端快照，流地址可能已失效。可点「重新拉取」重试。'
+            : 'B 站流地址约 60 分钟就过期，当前这份是 ' +
+              ageTxt +
+              '的快照，所以「暂无直播信号」多半不是赛事没开，而是数据太旧。腾讯的实时信号不受影响，可点「重新拉取」重试。',
         }),
       ])
     );
@@ -462,7 +476,11 @@
    * 拖到过期 —— 页面看着有内容，播放器却是黑的。
    */
   const DATA_MAX_AGE = {
-    liverooms: 2 * 60 * 60 * 1000, // B 站流地址约 60 分钟过期 → 2 小时是上限
+    // B 站流地址约 60 分钟过期 → 上限设 75 分钟（留一点余量）。
+    // ⚠️ 不能放宽：比如 jsDelivr 的分支 URL 会**冻结**十几小时（实测 age 3860s 且
+    // 加查询参数也破不掉），它的副本可能比本地快照「更新」→ 被采用 → 但里面的
+    // 流地址早已过期 → 页面看着有内容、播放器却是黑的。
+    liverooms: 75 * 60 * 1000,
     schedule: 24 * 60 * 60 * 1000, // 赛程本来就慢变
     catalog: 24 * 60 * 60 * 1000,
   };
@@ -733,14 +751,24 @@
       // 远端内容更新 → 取远端（内容时间戳拼进 URL 当缓存键：内容没变就命中缓存）
       const got = await fetchRemoteJson(name, src.stamp, bust, src.base);
       if (got) {
-        setDataStatus({ state: 'ok', ok: true, base: got.base, origin: 'remote' });
+        setDataStatus({
+          state: 'ok',
+          ok: true,
+          base: got.base,
+          origin: 'remote',
+          liveUpdatedAt: name === 'liverooms' ? got.json.updatedAt || src.stamp : DataStatus.liveUpdatedAt,
+        });
         return { json: got.json, origin: 'remote', ver, base: got.base };
       }
     }
     // 其余情况一律用本地（远端不可用 / 内容不比本地新 / 远端那份太旧 / 还没探测出远端版本）
     const local = await fetchJson('data/' + name + '.json' + bust, 0);
     if (local) {
-      setDataStatus({ origin: 'local', updatedAt: local.updatedAt || lastLocalVerUpdatedAt });
+      setDataStatus({
+        origin: 'local',
+        updatedAt: local.updatedAt || lastLocalVerUpdatedAt,
+        liveUpdatedAt: name === 'liverooms' ? local.updatedAt || '' : DataStatus.liveUpdatedAt,
+      });
       return { json: local, origin: 'local', ver };
     }
     // 本地也没有 → 最后才试远端
