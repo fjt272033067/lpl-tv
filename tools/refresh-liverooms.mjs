@@ -158,3 +158,30 @@ fs.writeFileSync(
 );
 console.log(`\n已写入 liverooms.json：${out.length} 个直播间，其中 ${out.filter((r) => r.live).length} 个正在直播`);
 out.slice(0, 12).forEach((r) => console.log(`   ${r.live ? '●' : '○'} ${r.roomid}  ${r.title.slice(0, 52)}${r.cover ? '  [有封面]' : ''}`));
+
+/* 4) 更新版本文件 —— 站点用 version.json 的 updatedAt 判断「数据有多新」。
+ *    轻量刷新只动 liverooms，schedule/catalog 的内容时间戳保持原样。 */
+const versionPath = path.join(DATA, 'version.json');
+let version = { updatedAt: new Date().toISOString(), files: {} };
+try {
+  if (fs.existsSync(versionPath)) version = JSON.parse(fs.readFileSync(versionPath, 'utf8'));
+} catch (e) {
+  /* 版本文件损坏就重建 */
+}
+version.updatedAt = new Date().toISOString();
+version.files = version.files || {};
+version.files.liverooms = version.files.liverooms || new Date().toISOString();
+// schedule/catalog 的内容时间戳：文件在就沿用，不在就记当前时间
+for (const f of ['schedule', 'catalog']) {
+  const p = path.join(DATA, f + '.json');
+  try {
+    if (fs.existsSync(p)) {
+      const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+      version.files[f] = j.updatedAt || version.files[f] || version.updatedAt;
+    }
+  } catch (e) {
+    /* 读不了就保留旧值 */
+  }
+}
+fs.writeFileSync(versionPath, JSON.stringify(version));
+console.log(`已更新 version.json（刷新时间 ${version.updatedAt}）`);
