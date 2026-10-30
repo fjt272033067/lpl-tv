@@ -1154,6 +1154,200 @@ function check(name, pass, detail) {
   await deadPage.close();
   remoteServer.close();
 
+  /* ---------------- 远端直播源：陈旧上限（75 分钟） ----------------
+   * B 站的流地址约 60 分钟过期，所以直播源数据不能用太旧的副本
+   * （比如 jsDelivr 那种会冻结十几小时的分支缓存）—— 否则页面看着有内容，
+   * 播放器却是黑的。这条判据要证明「太旧的远端直播源会被拒」。
+   *
+   * 三个场景（同一个远端服务器，只改时间戳 / 上限）：
+   *   A 对照     ：远端 liverooms = 10 分钟前（上限内）→ 必须采纳远端
+   *   B 被测     ：远端 liverooms = 90 分钟前（超上限）→ 必须**不**采纳远端
+   *   C 反向对照 ：同 B，但把上限临时改成 24 小时      → 必须采纳远端
+   *
+   * C 是用来证明 B 的判据**有判别力**的：没有 C，B 可能只是因为
+   * 「页面根本没去读远端」而永远通过 —— 那是一条永远为真的假判据。
+   *
+   * 本地 liverooms 统一压到 120 分钟前，这样远端那份在「比本地新」这一关
+   * 一定过得去（否则是被「比本地旧」挡下的，测的就不是陈旧上限了）。
+   */
+  const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lpltv-cap-'));
+  const CAP_NOW = Date.now();
+  const capIso = (ms) => new Date(ms).toISOString();
+  const localOldIso = capIso(CAP_NOW - 120 * 60 * 1000); // 本地：120 分钟前
+  const remoteOldIso = capIso(CAP_NOW - 90 * 60 * 1000); // 远端：90 分钟前（超 75 分钟上限）
+  const remoteFreshIso = capIso(CAP_NOW - 10 * 60 * 1000); // 远端：10 分钟前（上限内）
+  const capNowIso = capIso(CAP_NOW);
+  fs.writeFileSync(
+    path.join(capDir, 'schedule.json'),
+    JSON.stringify({
+      updatedAt: capNowIso,
+      source: '陈旧上限测试源',
+      total: 1,
+      matches: [
+        {
+          id: '',
+          title: '陈旧上限测试 STALECAPA vs STALECAPB',
+          game: '陈旧上限测试赛',
+          phase: '测试轮',
+          mode: 'BO5',
+          date: '2026-10-30 10:00:00',
+          duration: 0,
+          cover: '',
+          teamA: 'STALECAPA',
+          teamB: 'STALECAPB',
+          teamIdA: '',
+          teamIdB: '',
+          score: '1:0',
+          place: '',
+          published: false,
+          bvid: '',
+          biliPage: 0,
+        },
+      ],
+    })
+  );
+  let capLiveStamp = remoteOldIso;
+  const capServer = http.createServer((req, res) => {
+    const p = decodeURIComponent(req.url.split('?')[0]);
+    const send = (obj) => {
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify(obj));
+    };
+    if (p === '/version.json') {
+      send({
+        updatedAt: capNowIso,
+        files: { schedule: capNowIso, catalog: capNowIso, liverooms: capLiveStamp },
+      });
+    } else if (p === '/liverooms.json') {
+      send({ updatedAt: capLiveStamp, currentMatch: '', rooms: [], externalRooms: [] });
+    } else if (p === '/schedule.json') {
+      send(JSON.parse(fs.readFileSync(path.join(capDir, 'schedule.json'), 'utf8')));
+    } else if (p === '/catalog.json') {
+      send({ updatedAt: capNowIso, matches: [] });
+    } else {
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end('{}');
+    }
+  });
+  const capPort = await new Promise((r) =>
+    capServer.listen(0, '127.0.0.1', () => r(capServer.address().port))
+  );
+  const capBase = `http://127.0.0.1:${capPort}`;
+
+  /** 跑一个「远端直播源陈旧上限」场景，返回该场景下站点实际采用的数据时间戳 */
+  const runCapCase = async (remoteStamp, patchCap) => {
+    capLiveStamp = remoteStamp;
+    const pg = await ctx.newPage();
+    await pg.addInitScript(() => {
+      try {
+        sessionStorage.clear();
+      } catch (e) {
+        /* 忽略 */
+      }
+    });
+    await pg.addInitScript((b) => {
+      window.__LPLTV_DATA_BASE__ = b;
+    }, capBase);
+    // 本地快照压到 120 分钟前 → 远端那份「比本地新」，只有陈旧上限能挡住它
+    await pg.route(
+      (url) =>
+        url.hostname === '127.0.0.1' &&
+        url.port === String(port) &&
+        /\/data\/(liverooms|version)\.json$/.test(url.pathname),
+      async (route) => {
+        const u = new URL(route.request().url());
+        const isVer = u.pathname.endsWith('/version.json');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json; charset=utf-8',
+          body: JSON.stringify(
+            isVer
+              ? {
+                  updatedAt: localOldIso,
+                  files: { schedule: localOldIso, catalog: localOldIso, liverooms: localOldIso },
+                }
+              : { updatedAt: localOldIso, currentMatch: '', rooms: [], externalRooms: [] }
+          ),
+        });
+      }
+    );
+    if (patchCap) {
+      // 反向对照：把陈旧上限改成 24 小时（只在本页生效，不改仓库文件）
+      const src = fs.readFileSync(path.join(SITE, 'assets', 'app.js'), 'utf8');
+      const patched = src.replace(/liverooms:\s*[^,\n]+,/, 'liverooms: 24 * 60 * 60 * 1000,');
+      if (patched === src) throw new Error('反向对照失败：app.js 里找不到 liverooms 陈旧上限常量');
+      await pg.route(
+        (url) =>
+          url.hostname === '127.0.0.1' && url.port === String(port) && url.pathname === '/assets/app.js',
+        async (route) => {
+          await route.fulfill({
+            status: 200,
+            contentType: 'text/javascript; charset=utf-8',
+            body: patched,
+          });
+        }
+      );
+    }
+    await pg.goto(base + '/#/live', { waitUntil: 'domcontentloaded' });
+    await pg.waitForTimeout(6000);
+    const live = await pg.evaluate(() => {
+      const s = window.__LPLTV_DATA_STATUS__ || {};
+      const banner = document.querySelector('.data-channel');
+      return {
+        liveUpdatedAt: s.liveUpdatedAt || '',
+        bannerShown: !!banner && banner.style.display !== 'none',
+        bannerText: banner ? (banner.textContent || '').replace(/\s+/g, ' ').slice(0, 160) : '',
+      };
+    });
+    // 顺带看赛程页：远端赛程是新鲜的 → 必须仍然采纳（证明是**按文件**设限）
+    await pg.evaluate(() => {
+      location.hash = '#/schedule';
+    });
+    await pg.waitForTimeout(4500);
+    const schedText = await pg.evaluate(() => (document.body.innerText || '').replace(/\s+/g, ' '));
+    await pg.close();
+    return { live, schedText };
+  };
+
+  const capFresh = await runCapCase(remoteFreshIso, false);
+  console.log('   场景A 远端直播源 10 分钟前: ' + JSON.stringify(capFresh.live));
+  check(
+    '对照：上限内的远端直播源被采纳',
+    capFresh.live.liveUpdatedAt === remoteFreshIso,
+    capFresh.live.liveUpdatedAt
+  );
+
+  const capOver = await runCapCase(remoteOldIso, false);
+  console.log('   场景B 远端直播源 90 分钟前: ' + JSON.stringify(capOver.live));
+  check(
+    '超 75 分钟的远端直播源被拒（回退本地快照）',
+    capOver.live.liveUpdatedAt === localOldIso,
+    '采用=' + capOver.live.liveUpdatedAt + ' 本地=' + localOldIso
+  );
+  check(
+    '直播源快照过期时给出明确横幅（区分于「通道不可达」）',
+    capOver.live.bannerShown && /快照已过期/.test(capOver.live.bannerText),
+    capOver.live.bannerText.slice(0, 60)
+  );
+  check(
+    '陈旧上限按文件生效：同一远端的赛程仍然被采纳',
+    /STALECAPA/.test(capOver.schedText),
+    '赛程页含远端赛程标记'
+  );
+
+  const capNoLimit = await runCapCase(remoteOldIso, true);
+  console.log('   场景C 去掉上限后: ' + JSON.stringify(capNoLimit.live));
+  check(
+    '反向对照：去掉上限后同一份远端直播源会被采纳（证明上面那条判据有判别力）',
+    capNoLimit.live.liveUpdatedAt === remoteOldIso,
+    '采用=' + capNoLimit.live.liveUpdatedAt + ' 远端=' + remoteOldIso
+  );
+  capServer.close();
+
   /* ---------------- 移动端 ---------------- */
   console.log('\n[移动端]');
   const mob = await ctx.newPage();
