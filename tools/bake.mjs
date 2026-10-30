@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { fetchLiveRoom } from './bili-live.mjs';
 import { BILI_ROOM_IDS, EXTERNAL_ROOMS } from './live-rooms.mjs';
+import { sanitizeText } from './sanitize-danmaku.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -844,7 +845,17 @@ async function main() {
       part: page.part || '',
       title: m.biliTitle,
       count: items.length,
-      items,
+      // 落盘前脱敏：弹幕是第三方用户评论，偶尔混进真实的手机号/邮箱/卡号。
+      // 站点会公开播放这些弹幕，仓库更是公开可批量下载，所以先打码。
+      items: items.map((it) => {
+        if (!Array.isArray(it)) return it;
+        const last = it.length - 1;
+        const s = sanitizeText(String(it[last] ?? ''));
+        if (!s.hits.length) return it;
+        const copy = it.slice();
+        copy[last] = s.text;
+        return copy;
+      }),
     };
     fs.writeFileSync(outFile, JSON.stringify(payload));
     m.dmCount = items.length;

@@ -273,17 +273,49 @@ CDN 必然回源取新文件，且 `index.html` 与脚本的戳同源，不会�
 否则会和本地历史冲突），然后在本地推上去：
 
 ```bash
-cd E:\M3.1-Flash工作室\lpl-tv
-git remote add origin https://github.com/<你的用户名>/<仓库名>.git
+cd <项目目录>/lpl-tv
+git remote add origin git@github.com:<你的用户名>/<仓库名>.git
 git push -u origin main
 ```
 
-（推送约 17MB —— `site/data/dm/` 里是 187 个弹幕文件，属正常。Git 会提示输入
-GitHub 用户名与 Personal Access Token，**不要把 token 发给我**，在你自己终端里输入即可。）
+> **为什么推荐 SSH 而不是 HTTPS**：部分网络环境会用本地加速器接管 `github.com`
+> （hosts 指向 127.0.0.1），而这类加速器通常**不实现 git 的 smart-HTTP 协议**
+> （`/info/refs?service=git-receive-pack` 无响应）→ git 只会报一句极具误导性的
+> `Repository not found`（实际是「仓库不存在」和「加速器不认这个协议」完全不同的故障）。
+> `ssh.github.com` 不在接管名单里，直连即可。配好 `~/.ssh/config` 就能用：
+>
+> ```
+> Host github.com
+>     HostName ssh.github.com
+>     User git
+>     Port 443
+> ```
 
 **第 2 步：启用 Actions**
 仓库 → Actions → 左侧 `refresh-data` → 提示「I understand, enable these actions」→ 启用；
 再点 `Run workflow` 手动跑一次，确认它能提交 `site/data`（绿色对勾）。
+
+### 这个公开仓库里有什么
+
+| 目录 | 内容 | 说明 |
+|---|---|---|
+| `site/` | 站点代码与资源 | 自写前端；`vendor/` 是 hls.js / flv.js（MIT / BSD） |
+| `site/data/` | 赛程、录像目录、直播源 | 腾讯 LPL 公开接口的**事实性数据** + B 站视频的 BV/CID 映射 |
+| `site/data/dm/` | 弹幕文本 | B 站用户评论的批量转载 —— 落盘前已做**脱敏**（见下） |
+| `site/data/cover/` | 直播画面缩略帧 | 直播画面的截帧 |
+| `tools/` | 构建与验收脚本 | 数据烘焙、端到端验收、探针 |
+
+**发布前的风险处理**（`tools/audit-publish.mjs` 可复跑，全量扫描工作树 + **完整 git 历史**）：
+
+- **凭据**：全库与全部提交历史扫描 PAT / 私钥 / Cookie / token —— 0 命中。
+- **个人信息**：弹幕里偶尔混进真实联系方式，已在落盘前打码
+  （手机号整串替换、邮箱遮用户名、身份证需过校验位、银行卡需过 Luhn 才会处理，
+  避免把「666666666666」这类字符画误改）。脱敏规则见 `tools/sanitize-danmaku.mjs`，
+  烘焙流水线会自动执行。
+- **本地路径**：README 等文档里不出现任何本机绝对路径。
+- **仍在的第三方内容**：弹幕评论与直播帧属于第三方作品，公开仓库会让它们可被批量下载
+  （站点本来也在公开播放同样的内容）。介意的话把 `site/data/dm/`、`site/data/cover/`
+  排除出版本库即可 —— 它们只影响站点部署产物，不影响 CI 刷新赛程/直播源。
 
 **第 3 步：把站点指向这个仓库，并重新部署一次**
 

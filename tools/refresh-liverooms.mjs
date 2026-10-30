@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fetchJson, fetchLiveRoom, sleep } from './bili-live.mjs';
-import { EXTERNAL_ROOMS } from './live-rooms.mjs';
+import { BILI_ROOM_IDS, EXTERNAL_ROOMS } from './live-rooms.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.resolve(__dirname, '..', 'site', 'data');
@@ -44,6 +44,10 @@ function collect(j) {
       rooms.set(String(it.roomid), { roomid: it.roomid, uid: it.uid || 0, title });
     }
   }
+}
+// 固定兜底：官方赛事直播间（搜索不一定搜得到，但它们是主力线路）
+for (const id of BILI_ROOM_IDS) {
+  if (!rooms.has(String(id))) rooms.set(String(id), { roomid: id, uid: 0, title: '' });
 }
 const keywords = [
   ...subtitles.map((s) => s.replace(/\s*[:：]\s*/g, ' ')),
