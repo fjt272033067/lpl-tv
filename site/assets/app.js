@@ -257,45 +257,98 @@
   /**
    * 读取一份数据（本地 / 远端取内容更新的那份）。
    *
-   * 先读版本信息 version.json（很小），它记着：
+   * ⚠️ 铁律：**远端绝不能挡住首屏**。
+   * 远端是「增强」不是「依赖」：本地快照永远先渲染，远端在后台探测，
+   * 拿到更新的数据后再自动升级（直播页会重绘）。
+   *
+   * 为什么这么讲究：远端探测带超时，而超时靠 setTimeout 实现 ——
+   * 页面在后台标签里时 Chrome 会节流定时器，超时可能迟迟不触发，
+   * 于是那个 Promise 永远不 resolve，整页卡在「正在加载…」。
+   * （这个坑真的踩过：验收里新开的标签页全部空白，本地页却正常。）
+   *
+   * 版本信息 version.json（很小）记着：
    *   · updatedAt      —— 「上次核对上游的时间」，用于判断数据新不新；
    *   · files[名字]     —— 每份数据「内容最后变化的时间」。
-   * 用 files[名字] 决定取哪边，并把内容时间戳拼进 URL：
-   *   · 内容没变 → URL 不变 → 命中 CDN 缓存，不多下载；
-   *   · 内容变了 → URL 变了 → 必然取到新文件（绕开 CDN 的长缓存）。
-   * 远端拿不到就干净回退本地，站点不会因为外部依赖打不开。
+   * 远端版本信息缓存在 sessionStorage 里（5 分钟），避免每次加载都去探测。
    */
+  const REMOTE_VER_KEY = 'lpltv-remote-ver';
+  const REMOTE_VER_TTL = 5 * 60 * 1000;
+  /** 后台探测到更新的远端数据时的回调（页面注册，用来自动重绘） */
+  let remoteUpgradeHook = null;
+  let remoteProbeInFlight = false;
+  function onRemoteUpgrade(fn) {
+    remoteUpgradeHook = fn;
+    return () => {
+      if (remoteUpgradeHook === fn) remoteUpgradeHook = null;
+    };
+  }
+  function readRemoteVer(base) {
+    try {
+      const c = JSON.parse(sessionStorage.getItem(REMOTE_VER_KEY) || 'null');
+      if (!c || c.base !== base || !c.ts) return null;
+      if (Date.now() - c.ts > REMOTE_VER_TTL) return null;
+      return c;
+    } catch (e) {
+      return null;
+    }
+  }
+  function writeRemoteVer(base, ver, failed) {
+    try {
+      sessionStorage.setItem(
+        REMOTE_VER_KEY,
+        JSON.stringify({
+          base,
+          ts: Date.now(),
+          updatedAt: (ver && ver.updatedAt) || '',
+          files: (ver && ver.files) || null,
+          failed: !!failed,
+        })
+      );
+    } catch (e) {
+      /* 隐私模式下 sessionStorage 不可用，忽略 */
+    }
+  }
+
   async function loadDataFile(name, force) {
     const bust = force ? '?t=' + Date.now() : '';
-    // 本地版本信息同源、瞬间拿到；远端那份并行探测但**最多等 2.5 秒** ——
-    // raw.githubusercontent 在国内偏慢，远端是增强项，不能让它挡住首屏。
-    const [localVer, remoteVer] = await Promise.all([
-      fetchJson('data/version.json' + bust, 0),
-      REMOTE_DATA_BASE ? fetchJson(REMOTE_DATA_BASE + '/version.json' + bust, 2500) : Promise.resolve(null),
-    ]);
+    const localVer = await fetchJson('data/version.json' + bust, 0);
+    let remoteVer = null;
+    if (REMOTE_DATA_BASE) {
+      const cached = readRemoteVer(REMOTE_DATA_BASE);
+      if (cached) {
+        // 已经有探测结果：直接用，不发请求
+        remoteVer = cached.failed ? null : { updatedAt: cached.updatedAt, files: cached.files };
+      } else {
+        // 首次探测：放后台跑，**不 await** —— 首屏不能等它
+        if (!remoteProbeInFlight) {
+          remoteProbeInFlight = true;
+          fetchJson(REMOTE_DATA_BASE + '/version.json' + bust, 4000).then((v) => {
+            remoteProbeInFlight = false;
+            writeRemoteVer(REMOTE_DATA_BASE, v, !v);
+            if (v && remoteUpgradeHook && Date.parse(v.updatedAt || '') > Date.parse(localVer?.updatedAt || '')) {
+              remoteUpgradeHook(v);
+            }
+          });
+        }
+      }
+    }
     const ver = pickNewer(localVer, remoteVer); // 「刷新时间」取新的那份
     const lv = localVer && localVer.files ? localVer.files[name] : '';
     const rv = remoteVer && remoteVer.files ? remoteVer.files[name] : '';
 
-    // 两边都有版本信息 → 只拉需要的那一份
-    if (lv && rv) {
-      if (Date.parse(rv) > Date.parse(lv)) {
-        const j = await fetchJson(REMOTE_DATA_BASE + '/' + name + '.json?v=' + encodeURIComponent(rv), 8000);
-        if (j) return { json: j, origin: 'remote', ver };
-      }
-      const local = await fetchJson('data/' + name + '.json' + bust, 0);
-      if (local) return { json: local, origin: 'local', ver };
+    if (lv && rv && Date.parse(rv) > Date.parse(lv)) {
+      // 远端内容更新 → 取远端（内容时间戳拼进 URL 当缓存键：内容没变就命中缓存）
+      const j = await fetchJson(REMOTE_DATA_BASE + '/' + name + '.json?v=' + encodeURIComponent(rv), 8000);
+      if (j) return { json: j, origin: 'remote', ver };
+    }
+    // 其余情况一律用本地（远端不可用 / 内容不比本地新 / 还没探测出远端版本）
+    const local = await fetchJson('data/' + name + '.json' + bust, 0);
+    if (local) return { json: local, origin: 'local', ver };
+    // 本地也没有 → 最后才试远端
+    if (REMOTE_DATA_BASE) {
       const j = await fetchJson(REMOTE_DATA_BASE + '/' + name + '.json' + bust, 8000);
       if (j) return { json: j, origin: 'remote', ver };
-      return { json: null, origin: 'local', ver };
     }
-
-    // 老产物（没有版本信息）：两份都拉，按文件自己的 updatedAt 取新的
-    const local = await fetchJson('data/' + name + '.json' + bust, 0);
-    if (!REMOTE_DATA_BASE) return { json: local, origin: 'local', ver };
-    const remote = await fetchJson(REMOTE_DATA_BASE + '/' + name + '.json' + bust, 8000);
-    const picked = pickNewer(local, remote);
-    if (picked) return { json: picked, origin: picked === remote ? 'remote' : 'local', ver };
     return { json: null, origin: 'local', ver };
   }
 
@@ -1887,6 +1940,19 @@
       /* 忽略 */
     }
 
+    // 后台探测到更新的远端数据（CI 重建后）时自动重绘整个直播页。
+    // B 站流地址约 60 分钟就过期，这一跳决定了「腾讯不开播时有没有 B 站线路」。
+    const offRemote = onRemoteUpgrade(async () => {
+      // 强制重拉一次（此时远端版本已在会话缓存里，会直接取更新的那份），
+      // 再整体重绘 —— 否则 ensureBiliRooms 的缓存会让新数据用不上。
+      try {
+        await ensureBiliRooms(true);
+      } catch (e) {
+        /* 忽略 */
+      }
+      renderLive();
+    });
+
     // ② 腾讯官方直播（运行时直连 JSONP）
     let txLive = [];
     let bmatch = null;
@@ -2043,6 +2109,8 @@
 
     const p = new Player(playerHost, { mode: 'live' });
     activePlayer = p;
+    // 离开直播页时注销「远端升级 → 自动重绘」的回调
+    p._cleanups.push(offRemote);
     p.setSpeed(1);
     p.renderSpeedMenu();
     p.renderDmMenu();
@@ -2772,6 +2840,12 @@
   async function renderVod() {
     setNav('vod');
     loading('正在加载录像库…');
+    // 后台探测到更新的远端数据时自动重绘（录像目录也会随 CI 更新）
+    onRemoteUpgrade(() => {
+      if (location.hash.indexOf('#/vod') !== 0) return; // 已经离开录像库
+      Repo.catalog = null; // 丢掉本地缓存，让下一次 load 取更新的那份
+      renderVod();
+    });
     let cat;
     try {
       cat = await Repo.load();
@@ -3180,6 +3254,12 @@
   async function renderSchedule() {
     setNav('schedule');
     loading('正在加载赛程…');
+    // 后台探测到更新的远端数据时自动重绘（赛程是「自动更新」的主角）
+    onRemoteUpgrade(() => {
+      if (location.hash.indexOf('#/schedule') !== 0) return; // 已经离开赛程页
+      Repo.schedule = null; // 丢掉本地缓存，让下一次 load 取更新的那份
+      renderSchedule();
+    });
     let cat;
     let list;
     try {

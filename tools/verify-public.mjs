@@ -518,7 +518,9 @@ await page.screenshot({ path: 'data/ui-smoke/07-schedule.png' });
 // ⚠️ 路由只匹配**本站**的请求：`**/data/schedule.json*` 会连远端数据源
 // （raw.githubusercontent.com/.../site/data/schedule.json）一起匹配上，
 // 到时候「注入旧快照」注入的其实是远端那份，判据就测偏了。
-const SITE_HOST = new URL(URL).hostname;
+// 注意：本文件里有个常量叫 URL（站点地址），它会遮蔽全局的 URL 构造器，
+// 所以这里不能用 new URL()，只能自己拆出主机名。
+const SITE_HOST = URL.replace(/^https?:\/\//, '').split('/')[0].split(':')[0];
 const stalePage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 await stalePage.route(
   (url) => url.hostname === SITE_HOST && url.pathname.endsWith('/data/schedule.json'),
