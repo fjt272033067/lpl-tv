@@ -305,9 +305,8 @@
    */
   const REMOTE_VER_KEY = 'lpltv-remote-ver';
   const REMOTE_VER_TTL = 5 * 60 * 1000;
-  /** 探不通的基址：先记 30 分钟，别让每次加载都去撞同一堵墙 */
+  /** 探不通的基址：按失败次数递进退避（见 DEAD_BACKOFF） */
   const REMOTE_DEAD_KEY = 'lpltv-remote-dead';
-  const REMOTE_DEAD_TTL = 30 * 60 * 1000;
 
   /**
    * 数据通道状态：远端通不通、生效的是远端还是本地、失败原因。
@@ -468,14 +467,26 @@
     catalog: 24 * 60 * 60 * 1000,
   };
   const DEFAULT_MAX_AGE = 6 * 60 * 60 * 1000;
+  /**
+   * 探不通的基址：按**失败次数**递进退避，而不是一刀切记死 30 分钟。
+   *
+   * ⚠️ 这里踩过坑：原来一次失败就跳过 30 分钟，而 raw.githubusercontent.com
+   * 偶发失败一次（8ms 直接 Failed to fetch）—— 于是**唯一新鲜的源**整整半小时
+   * 不参与探测，站点只能拿到落后 15 分钟的代理缓存，数据更新链直接断一截。
+   * → 失败 1 次只跳过 1 分钟（探测周期就是 1 分钟），2 次 5 分钟，再往后 30 分钟。
+   */
+  const DEAD_BACKOFF = [60 * 1000, 5 * 60 * 1000, 30 * 60 * 1000];
+
   function deadBases() {
     try {
       const c = JSON.parse(sessionStorage.getItem(REMOTE_DEAD_KEY) || '{}');
       const now = Date.now();
       const out = {};
       Object.keys(c).forEach((b) => {
-        if (now - c[b] > REMOTE_DEAD_TTL) delete c[b];
-        else out[b] = c[b];
+        const e = c[b];
+        const until = typeof e === 'number' ? e : e && e.until;
+        if (!until || now > until) delete c[b];
+        else out[b] = e;
       });
       return out;
     } catch (e) {
@@ -485,7 +496,10 @@
   function markDead(base) {
     try {
       const c = JSON.parse(sessionStorage.getItem(REMOTE_DEAD_KEY) || '{}');
-      c[base] = Date.now();
+      const prev = c[base];
+      const fails = (prev && prev.fails ? prev.fails : 0) + 1;
+      const wait = DEAD_BACKOFF[Math.min(fails - 1, DEAD_BACKOFF.length - 1)];
+      c[base] = { fails, until: Date.now() + wait };
       sessionStorage.setItem(REMOTE_DEAD_KEY, JSON.stringify(c));
     } catch (e) {
       /* 忽略 */
