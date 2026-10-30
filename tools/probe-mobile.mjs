@@ -27,7 +27,7 @@ console.log('探测目标: ' + BASE);
 const { pw } = resolvePlaywright();
 const browser = await pw.chromium.launch({
   executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  headless: false,
+  headless: process.env.HEADED !== '1',
   args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'],
 });
 const ctx = await browser.newContext({

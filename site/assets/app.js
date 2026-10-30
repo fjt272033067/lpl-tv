@@ -640,6 +640,37 @@
   /** 同时在飞的探测数（每个镜像各自结算） */
   let remoteProbePending = 0;
 
+  /**
+   * 定期重探远端通道。
+   *
+   * 为什么需要：CI 每 20 分钟把新数据提交到仓库，站点得**自己发现**，
+   * 而不是等用户刷新页面 —— B 站流地址约 60 分钟过期，
+   * 页面开久了必须能自动换到新地址。
+   *
+   * 只在「会话缓存里的远端版本已过期」时才真发请求，其余时候直接跳过。
+   */
+  function maybeRefreshRemoteChannel() {
+    if (!REMOTE_DATA_BASES.length) return;
+    if (remoteProbeInFlight) return;
+    const cached = readRemoteVer();
+    if (cached && cached.length) return; // 还在有效期内，不用重探
+    remoteProbeInFlight = true;
+    probeRemoteVersions('?t=' + Date.now());
+  }
+
+  let channelPollTimer = null;
+  function startChannelPoll() {
+    stopChannelPoll();
+    channelPollTimer = setInterval(() => {
+      if (document.hidden) return;
+      maybeRefreshRemoteChannel();
+    }, 60000);
+  }
+  function stopChannelPoll() {
+    if (channelPollTimer) clearInterval(channelPollTimer);
+    channelPollTimer = null;
+  }
+
   /** 远端探不通时每 45 秒重试一次（页面不可见时不重试） */
   function scheduleRemoteRetry() {
     if (remoteRetryTimer || !REMOTE_DATA_BASES.length) return;
@@ -2303,6 +2334,10 @@
     const seq = beginRender();
     setNav('live');
     loading('正在连接直播源…');
+    // ⚠️ 必须在这里声明（不能等到后面）：下面的「远端升级」回调可能在本函数的
+    // await 期间就触发（onRemoteUpgrade 会把挂起的升级立刻补发），
+    // 届时若变量还在 TDZ 里 → ReferenceError → 整个渲染中断。
+    let currentSource = null;
 
     // ① B 站直播间（构建期预取了直播流地址）
     let rooms = [];
@@ -2316,11 +2351,22 @@
     // B 站流地址约 60 分钟就过期，这一跳决定了「腾讯不开播时有没有 B 站线路」。
     const offRemote = onRemoteUpgrade(async () => {
       // 强制重拉一次（此时远端版本已在会话缓存里，会直接取更新的那份），
-      // 再整体重绘 —— 否则 ensureBiliRooms 的缓存会让新数据用不上。
+      // 否则 ensureBiliRooms 的缓存会让新数据用不上。
+      let fresh = [];
       try {
-        await ensureBiliRooms(true);
+        fresh = (await ensureBiliRooms(true)) || [];
       } catch (e) {
         /* 忽略 */
+      }
+      // ⚠️ 正在播的线路还活着就别打断用户：
+      // 整页重绘会重建播放器、让画面从头开始。CI 每 20 分钟更新一次数据，
+      // 每 20 分钟打断一次观看是不能接受的。只在「当前线路已失效」时才重绘。
+      const cur = currentSource;
+      if (cur && cur.kind === 'bili' && cur.room) {
+        const alive = fresh.some(
+          (r) => r && r.roomid === cur.room.roomid && r.stream && !streamExpired(r)
+        );
+        if (alive) return; // 数据已换新，但不动正在播的流
       }
       renderLive();
     });
@@ -2567,7 +2613,6 @@
 
     /** 画质条：显示当前实际分辨率，并在有更高档位时给一键切换 */
     let currentRes = { w: 0, h: 0 };
-    let currentSource = null;
     const renderQualityBar = () => {
       qBar.innerHTML = '';
       if (!currentSource) return;
@@ -4197,4 +4242,6 @@
 
   // 首屏
   route();
+  // 远端数据通道的定期重探（CI 每 20 分钟更新一次数据，站点要自己发现）
+  startChannelPoll();
 })();

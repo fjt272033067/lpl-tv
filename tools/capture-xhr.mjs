@@ -18,7 +18,7 @@ const TAG = process.argv[3] || 'xhr';
 const { pw } = resolvePlaywright();
 const browser = await pw.chromium.launch({
   executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  headless: false,
+  headless: process.env.HEADED !== '1',
   args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--mute-audio'],
 });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });

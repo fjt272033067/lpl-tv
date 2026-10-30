@@ -65,9 +65,11 @@ function check(name, pass, detail) {
   console.log(`静态服务器：${base}\n`);
 
   const browser = await chromium.launch({
-  // 用有头浏览器：B 站对无头浏览器会弹验证码/黑屏，那不是真实用户环境。
-  // 需要 CI 环境时设 HEADLESS=1（届时抽屉的「画面变化率」断言可能不成立）。
-  headless: process.env.HEADLESS === '1',
+  // 默认**无头**跑：验收是后台静默干的，不要在用户桌面上弹浏览器窗口。
+  // 需要有头（想肉眼看看、或排查 B 站验证码）时设 HEADED=1。
+  // 注意：B 站对无头浏览器偶尔会弹验证码/黑屏 —— 那种情况下只有依赖真实解码的
+  // 断言（「弹幕画面变化率」这类）可能不成立，其余判据不受影响。
+  headless: process.env.HEADED !== '1',
   executablePath: CHROME,
   args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--mute-audio', '--window-size=1440,900'],
 });

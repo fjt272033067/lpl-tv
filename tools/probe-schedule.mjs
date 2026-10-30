@@ -13,7 +13,7 @@ const BASE = process.argv[2] || 'http://127.0.0.1:8099';
 const { pw } = resolvePlaywright();
 const browser = await pw.chromium.launch({
   executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  headless: false,
+  headless: process.env.HEADED !== '1',
   args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'],
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });

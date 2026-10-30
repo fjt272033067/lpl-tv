@@ -17,9 +17,9 @@ const check = (n, p, d) => {
 };
 
 const browser = await chromium.launch({
-  // 用有头浏览器：B 站对无头浏览器会弹验证码/黑屏，那不是真实用户环境。
-  // 需要 CI 环境时设 HEADLESS=1（届时抽屉的「画面变化率」断言可能不成立）。
-  headless: process.env.HEADLESS === '1',
+  // 默认**无头**跑：验收是后台静默干的，不要在用户桌面上弹浏览器窗口。
+  // 需要有头时设 HEADED=1。
+  headless: process.env.HEADED !== '1',
   executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
   args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--mute-audio', '--window-size=1440,900'],
 });
@@ -588,8 +588,49 @@ await page.screenshot({ path: 'data/ui-smoke/07-schedule.png' });
 // 到时候「注入旧快照」注入的其实是远端那份，判据就测偏了。
 // 注意：本文件里有个常量叫 URL（站点地址），它会遮蔽全局的 URL 构造器，
 // 所以这里不能用 new URL()，只能自己拆出主机名。
+//
+// ⚠️⚠️ 远端镜像也必须一起「变旧」（实测 2026-10-30 踩到）：
+// 站点会拿远端那份按内容时间戳择新。只把本站快照改旧、远端仍是新鲜的，
+// 站点就会**正确地**选更新的远端那份 → 陈旧横幅自然不出现 → 判据假失败。
+// 那是注入不完整，不是站点缺陷 —— 两边都要改旧。
 const SITE_HOST = URL.replace(/^https?:\/\//, '').split('/')[0].split(':')[0];
 const stalePage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+// 先从线上 index.html 里读出配了哪些远端基址（不要硬编码，配置会变）
+const idxHtml = await (await fetch(URL + '/index.html?t=' + Date.now())).text();
+const remoteBases = [
+  (idxHtml.match(/name="lpl-tv-data-base"\s+content="([^"]+)"/) || [])[1] || '',
+  ...((idxHtml.match(/name="lpl-tv-data-mirrors"\s+content="([^"]+)"/) || [])[1] || '').split(','),
+]
+  .map((s) => s.trim())
+  .filter(Boolean);
+const OLD_ISO = new Date(Date.now() - 5 * 86400000).toISOString();
+// 远端那份 schedule.json / version.json 的真实内容（Node 侧取一次，给所有镜像复用）
+const realSchedule = await (await fetch(URL + '/data/schedule.json')).json();
+realSchedule.updatedAt = OLD_ISO;
+const realVersion = await (await fetch(URL + '/data/version.json')).json();
+realVersion.updatedAt = OLD_ISO;
+if (realVersion.files) realVersion.files = { schedule: OLD_ISO, catalog: OLD_ISO, liverooms: OLD_ISO };
+for (const base of remoteBases) {
+  await stalePage.route(
+    (url) => url.href.startsWith(base) && url.pathname.endsWith('/version.json'),
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify(realVersion),
+      })
+  );
+  await stalePage.route(
+    (url) => url.href.startsWith(base) && url.pathname.endsWith('/schedule.json'),
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify(realSchedule),
+      })
+  );
+}
 await stalePage.route(
   (url) => url.hostname === SITE_HOST && url.pathname.endsWith('/data/schedule.json'),
   async (route) => {

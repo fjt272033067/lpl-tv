@@ -11,7 +11,7 @@ const URL = process.argv[2] || 'https://4kf9kfxujfhg2.space.mcode.cn';
 const { chromium } = resolvePlaywright().pw;
 
 const browser = await chromium.launch({
-  headless: process.env.HEADLESS === '1',
+  headless: process.env.HEADED !== '1',
   executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
   args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--mute-audio'],
 });
