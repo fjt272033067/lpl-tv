@@ -295,6 +295,18 @@ git push -u origin main
 仓库 → Actions → 左侧 `refresh-data` → 提示「I understand, enable these actions」→ 启用；
 再点 `Run workflow` 手动跑一次，确认它能提交 `site/data`（绿色对勾）。
 
+**本仓库实例的实际地址**（照抄即可）：
+
+| 项目 | 值 |
+|---|---|
+| 仓库 | `https://github.com/fjt272033067/lpl-tv`（Public） |
+| 远端数据基址 | `https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data` |
+| 站点远端探针 | `https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data/version.json` |
+
+> 站点 `site/index.html` 里的 `<meta name="lpl-tv-data-base">` 已经指向上面这个地址；
+> **仓库一旦推送上去，站点就会自动开始读远端数据**，不需要重新部署站点。
+> 改地址用 `node tools/set-data-base.mjs <新地址>`，改完记得 `node tools/stamp-assets.mjs` 再部署。
+
 ### 这个公开仓库里有什么
 
 | 目录 | 内容 | 说明 |
