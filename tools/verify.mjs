@@ -72,6 +72,13 @@ function check(name, pass, detail) {
   args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--mute-audio', '--window-size=1440,900'],
 });
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  // 本地验收固定用本地快照：把远端数据源拦成「空对象」，站点会自动回退本地。
+  // （真实远端链路由线上套件 verify-public.mjs 覆盖 —— 那边跑的是线上真实配置。）
+  // 注意：这里返回 200 + {} 而不是 404 —— 404 会让浏览器控制台刷一串
+  // "Failed to load resource"，把验收报告弄脏（功能不受影响，但会掩盖真错误）。
+  await ctx.route('https://raw.githubusercontent.com/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: '{}' })
+  );
   const page = await ctx.newPage();
 
   const consoleErrors = [];
@@ -345,19 +352,27 @@ function check(name, pass, detail) {
   // 关键判据：B 站流地址约 60 分钟过期（B 站签名机制），
   // 过期后必须自动切到还活着的线路，而不是给用户留一块黑屏。
   // 这里把 liverooms.json 响应里的 expires 改成过去时间来模拟过期。
+  //
+  // ⚠️ 路由必须只匹配**本站**的请求：用 `**/data/liverooms.json` 这种通配符会连
+  // 远端数据源（raw.githubusercontent.com/.../site/data/liverooms.json）一起匹配上，
+  // 于是 route.fetch() 去抓还不存在的远端 → 拿到 404 文本 → JSON 解析崩溃。
   const expPage = await ctx.newPage();
-  await expPage.route('**/data/liverooms.json', async (route) => {
-    const res = await route.fetch();
-    const j = await res.json();
-    (j.rooms || []).forEach((r) => {
-      if (r.stream) r.stream.expires = Math.floor(Date.now() / 1000) - 3600;
-    });
-    await route.fulfill({
-      response: res,
-      body: JSON.stringify(j),
-      headers: { 'content-type': 'application/json' },
-    });
-  });
+  await expPage.route(
+    (url) => url.hostname === '127.0.0.1' && url.pathname.endsWith('/data/liverooms.json'),
+    async (route) => {
+      const res = await route.fetch();
+      if (!res.ok()) return route.continue();
+      const j = await res.json();
+      (j.rooms || []).forEach((r) => {
+        if (r.stream) r.stream.expires = Math.floor(Date.now() / 1000) - 3600;
+      });
+      await route.fulfill({
+        response: res,
+        body: JSON.stringify(j),
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+  );
   await expPage.goto(base + '/#/live', { waitUntil: 'domcontentloaded' });
   await expPage.waitForTimeout(11000);
   const expState = await expPage.evaluate(() => {
@@ -900,28 +915,34 @@ function check(name, pass, detail) {
   // 所以要模拟陈旧，必须把 version.json 一起换成旧的 —— 只改 schedule.json
   // 模拟的是「数据文件旧但核对记录新」，现实中不会出现。
   const stalePage = await ctx.newPage();
-  await stalePage.route('**/data/schedule.json*', async (route) => {
-    const res = await route.fetch();
-    const body = await res.json();
-    body.updatedAt = new Date(Date.now() - 5 * 86400000).toISOString();
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json; charset=utf-8',
-      body: JSON.stringify(body),
-    });
-  });
-  await stalePage.route('**/data/version.json*', async (route) => {
-    const res = await route.fetch();
-    const body = await res.json();
-    const old = new Date(Date.now() - 5 * 86400000).toISOString();
-    body.updatedAt = old;
-    if (body.files) body.files = { schedule: old, catalog: old, liverooms: old };
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json; charset=utf-8',
-      body: JSON.stringify(body),
-    });
-  });
+  await stalePage.route(
+    (url) => url.hostname === '127.0.0.1' && url.pathname.endsWith('/data/schedule.json'),
+    async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      body.updatedAt = new Date(Date.now() - 5 * 86400000).toISOString();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify(body),
+      });
+    }
+  );
+  await stalePage.route(
+    (url) => url.hostname === '127.0.0.1' && url.pathname.endsWith('/data/version.json'),
+    async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      const old = new Date(Date.now() - 5 * 86400000).toISOString();
+      body.updatedAt = old;
+      if (body.files) body.files = { schedule: old, catalog: old, liverooms: old };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify(body),
+      });
+    }
+  );
   await stalePage.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
   await stalePage.waitForTimeout(5000);
   const stale = await stalePage.evaluate(() => ({

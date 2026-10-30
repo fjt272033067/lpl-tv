@@ -514,29 +514,40 @@ await page.screenshot({ path: 'data/ui-smoke/07-schedule.png' });
 // 陈旧快照的防错：把线上的 schedule.json 换成一份旧快照，页面必须提示并把
 // 未开打的对阵标成「待确认」（而不是继续显示可能过时的队名）。
 // 新鲜度取自 version.json（= 上次核对上游的时间），所以 version.json 也要一起换成旧的。
+//
+// ⚠️ 路由只匹配**本站**的请求：`**/data/schedule.json*` 会连远端数据源
+// （raw.githubusercontent.com/.../site/data/schedule.json）一起匹配上，
+// 到时候「注入旧快照」注入的其实是远端那份，判据就测偏了。
+const SITE_HOST = new URL(URL).hostname;
 const stalePage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-await stalePage.route('**/data/schedule.json*', async (route) => {
-  const res = await route.fetch();
-  const body = await res.json();
-  body.updatedAt = new Date(Date.now() - 5 * 86400000).toISOString();
-  await route.fulfill({
-    status: 200,
-    contentType: 'application/json; charset=utf-8',
-    body: JSON.stringify(body),
-  });
-});
-await stalePage.route('**/data/version.json*', async (route) => {
-  const res = await route.fetch();
-  const body = await res.json();
-  const old = new Date(Date.now() - 5 * 86400000).toISOString();
-  body.updatedAt = old;
-  if (body.files) body.files = { schedule: old, catalog: old, liverooms: old };
-  await route.fulfill({
-    status: 200,
-    contentType: 'application/json; charset=utf-8',
-    body: JSON.stringify(body),
-  });
-});
+await stalePage.route(
+  (url) => url.hostname === SITE_HOST && url.pathname.endsWith('/data/schedule.json'),
+  async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.updatedAt = new Date(Date.now() - 5 * 86400000).toISOString();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify(body),
+    });
+  }
+);
+await stalePage.route(
+  (url) => url.hostname === SITE_HOST && url.pathname.endsWith('/data/version.json'),
+  async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const old = new Date(Date.now() - 5 * 86400000).toISOString();
+    body.updatedAt = old;
+    if (body.files) body.files = { schedule: old, catalog: old, liverooms: old };
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify(body),
+    });
+  }
+);
 await stalePage.goto(pageUrl('#/schedule'), { waitUntil: 'domcontentloaded' });
 await stalePage.waitForTimeout(5000);
 const stale = await stalePage.evaluate(() => ({

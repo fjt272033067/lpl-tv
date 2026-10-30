@@ -267,8 +267,12 @@
    */
   async function loadDataFile(name, force) {
     const bust = force ? '?t=' + Date.now() : '';
-    const localVer = await fetchJson('data/version.json' + bust, 0);
-    const remoteVer = REMOTE_DATA_BASE ? await fetchJson(REMOTE_DATA_BASE + '/version.json' + bust, 8000) : null;
+    // 本地版本信息同源、瞬间拿到；远端那份并行探测但**最多等 2.5 秒** ——
+    // raw.githubusercontent 在国内偏慢，远端是增强项，不能让它挡住首屏。
+    const [localVer, remoteVer] = await Promise.all([
+      fetchJson('data/version.json' + bust, 0),
+      REMOTE_DATA_BASE ? fetchJson(REMOTE_DATA_BASE + '/version.json' + bust, 2500) : Promise.resolve(null),
+    ]);
     const ver = pickNewer(localVer, remoteVer); // 「刷新时间」取新的那份
     const lv = localVer && localVer.files ? localVer.files[name] : '';
     const rv = remoteVer && remoteVer.files ? remoteVer.files[name] : '';
