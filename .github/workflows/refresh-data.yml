@@ -40,6 +40,13 @@ on:
       vods:
         description: '抓取的录像条数（增量模式下只处理新增比赛）'
         default: '160'
+  # 代码改了也跟着重烘焙一次（改的是脚本/配置时，本地快照可能已经过时）。
+  # 用 paths-ignore 排除 site/data/**：本工作流自己只提交 site/data，
+  # 所以它触发的提交不会再次触发本工作流 —— 不会自激循环。
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'site/data/**'
 
 permissions:
   contents: write
