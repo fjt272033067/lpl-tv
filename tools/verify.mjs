@@ -76,12 +76,10 @@ function check(name, pass, detail) {
   // （真实远端链路由线上套件 verify-public.mjs 覆盖 —— 那边跑的是线上真实配置。）
   // 注意：这里返回 200 + {} 而不是 404 —— 404 会让浏览器控制台刷一串
   // "Failed to load resource"，把验收报告弄脏（功能不受影响，但会掩盖真错误）。
-  await ctx.route('https://raw.githubusercontent.com/**', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: '{}' })
-  );
-  // jsDelivr 镜像也一样拦掉：本地验收不该去碰真实 CDN，
+  // 所有远端镜像都拦掉：本地验收不该去碰真实 CDN，
   // 否则「谁先返回谁生效」的镜像竞速会打到网络，判据变得不确定。
-  await ctx.route(/jsdelivr\.net/, (route) =>
+  const OFFLINE_MIRRORS = /raw\.githubusercontent\.com|jsdelivr\.net|gh-proxy\.com/;
+  await ctx.route(OFFLINE_MIRRORS, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: '{}' })
   );
   const page = await ctx.newPage();
@@ -811,19 +809,16 @@ function check(name, pass, detail) {
   );
   // 镜像也要喂同一份假数据：站点现在会并发探测多个镜像，
   // 只 mock 主源的话，谁先返回谁生效就成了网络竞速，判据会飘。
-  await racePage.route(/jsdelivr\.net.*\/version\.json/, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json; charset=utf-8',
-      body: JSON.stringify({ updatedAt: newer, files: { schedule: newer, catalog: newer, liverooms: newer } }),
-    })
-  );
-  await racePage.route(/jsdelivr\.net.*\/schedule\.json/, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: raceSched })
-  );
-  await racePage.route(/jsdelivr\.net.*\/catalog\.json/, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: raceCat })
-  );
+  const MIRROR_FILES = [
+    ['version\\.json', JSON.stringify({ updatedAt: newer, files: { schedule: newer, catalog: newer, liverooms: newer } })],
+    ['schedule\\.json', raceSched],
+    ['catalog\\.json', raceCat],
+  ];
+  for (const [pat, body] of MIRROR_FILES) {
+    await racePage.route(new RegExp('(raw\\.githubusercontent\\.com|jsdelivr\\.net|gh-proxy\\.com).*' + pat), (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body })
+    );
+  }
   await racePage.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
   await racePage.waitForTimeout(12000);
   const dup = await racePage.evaluate(() => ({

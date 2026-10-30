@@ -16,16 +16,24 @@
       远端两份都读回来并按 updatedAt 取更新的那份 —— 于是 CI 每次重建只要把 site/data
       提交到公开仓库，赛程与直播源就能日更，不必重新部署站点本身。
 
-      为什么要有「镜像」列表：raw.githubusercontent.com 在中国大陆经常连不上
-      （本机实测：Chrome 直接 fetch 立刻失败，走系统代理的 PowerShell 才通 ——
-      浏览器不继承那套代理）。只押一个源，用户浏览器一旦拿不到远端，就只能一直
-      用本地快照，于是出现「CI 明明更新了数据、页面却还是旧的」这种静默失败。
-      站点会并发探测这些镜像，先返回的先用；探不通的先记 30 分钟不来烦用户。
+      ⚠️ 为什么要「镜像」列表（实测 2026-10-30，本机浏览器）：
+        raw.githubusercontent.com 在大陆经常连不上（本机 Chrome 直接 fetch 8ms 就
+        "Failed to fetch"，而走系统代理的 PowerShell 却能通 —— 浏览器不继承那套代理）。
+        只押一个源 = 用户的浏览器一旦拿不到远端，就只能一直用部署时的本地快照，
+        于是出现「CI 明明更新了数据、页面却还是旧的」这种静默失败。
+        站点会并发探测这些镜像，并**按内容时间戳挑最新的那份**（先到的不一定最新）。
+
+      镜像的缓存策略差一个数量级，所以站点还按文件设了「陈旧上限」：
+        raw.githubusercontent.com → 5 分钟
+        gh-proxy.com             → 60 秒（带 ACAO: *，大陆可直连，实测能拿到最新内容）
+        jsDelivr 家族            → 12 小时（实测：仓库提交 34 分钟后它还在吐旧版本）
+      liverooms（B 站流地址约 60 分钟过期）超过 2 小时就不采用远端那份，
+      避免出现「页面看着有内容、播放器却是黑的」。
     -->
     <meta name="lpl-tv-data-base" content="https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data" />
     <meta
       name="lpl-tv-data-mirrors"
-      content="https://gcore.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data, https://cdn.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data, https://fastly.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data"
+      content="https://gh-proxy.com/https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data, https://gcore.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data, https://cdn.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data"
     />
     <!-- 微信/QQ 内置浏览器（X5）适配 -->
     <meta name="x5-orientation" content="landscape" />
@@ -36,7 +44,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300b3ff'/%3E%3Cpath d='M14 20h36v24H14z' fill='none' stroke='%23fff' stroke-width='4'/%3E%3Cpath d='M26 28l14 8-14 8z' fill='%23fff'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="assets/style.css?v=aee1167c79" />
+    <link rel="stylesheet" href="assets/style.css?v=86b3a57bc0" />
   </head>
   <body>
     <a class="skip" href="#view">跳到主要内容</a>
@@ -110,7 +118,7 @@
 
     <script src="assets/vendor/hls.min.js"></script>
     <script src="assets/vendor/flv.min.js"></script>
-    <script src="assets/danmaku.js?v=aee1167c79"></script>
-    <script src="assets/app.js?v=aee1167c79"></script>
+    <script src="assets/danmaku.js?v=86b3a57bc0"></script>
+    <script src="assets/app.js?v=86b3a57bc0"></script>
   </body>
 </html>

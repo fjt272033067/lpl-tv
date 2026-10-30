@@ -38,24 +38,30 @@ on:
     # 分钟数用 11/31/51（错开整点与半点）：整点是 GitHub 调度最拥堵的时刻，
     # 高峰期定时任务会被延迟甚至整段丢弃。
     #
-    # ⚠️⚠️ 改了这段 cron 必须「推上去」才能让 GitHub 重新注册调度，
-    # 而且**提交者身份必须是 GitHub 能识别的账号**，否则调度永远注册不上。
+    # ⚠️⚠️ 改了这段 cron 必须「推上去」才能让 GitHub 重新注册调度。
     #
     # 这个坑真的踩过（实测 2026-10-30）：仓库建好后 event=schedule 的 run 一条都没有，
     # 而 workflow 明明是 active、workflow_dispatch 手动也能跑、push 触发器照常触发。
-    # 根因是本仓库的 git 邮箱填的是 fangchen@localhost —— 这个地址在 GitHub 上
-    # 没有对应任何账号，提交在 API 里 author/committer 全是 null。
-    # 而 GitHub 的定时调度是「绑定到最后一次修改 cron 那一行提交的身份」的：
-    # 提交者归属不到账号 → 调度没有归属人 → GitHub 根本不创建这条 schedule。
     #
-    # 排查判据（一眼定位）：
-    #   GET /repos/<owner>/<repo>/commits/<改了 cron 的那次提交>
-    #   → 顶层 author.login / committer.login 必须是账号名；是 null 就是这个问题。
+    # ⚠️ 排查结论（已核实，别再走一遍错路）：
+    #   · 提交者身份确实是个坑 —— 本仓库 git 邮箱填的是 fangchen@localhost，
+    #     这个地址在 GitHub 上没有对应账号，提交在 API 里顶层 author/committer 全是 null。
+    #     已改成可归属的 noreply 邮箱（身份该改还是要改，这本身是最佳实践）。
+    #   · 但「调度绑定到改 cron 那次提交的身份」这条机制**并不存在**（官方文档无此规则），
+    #     而且**改完身份 + 改完 cron 之后，schedule run 依然一条都没有**。
+    #   · 判决手段是加一个最小探针工作流（cron '*/5 * * * *'）：探针也没有 schedule run
+    #     → 说明是**仓库/账号层面的调度没注册**，不是本文件写错了。
+    #     同一时刻对照组 github/docs 有 2500 条 schedule run，平台是健康的。
     #
-    # 修复：把仓库级 git 身份改成 GitHub 可验证的 noreply 邮箱再提交一次：
-    #   git config user.email "<数字ID>+<用户名>@users.noreply.github.com"
-    #   git config user.name  "<用户名>"
-    # 然后改一次 cron 表达式并推送 —— 两个动作能一次做完最好。
+    # → 结论：这条 cron 保留着（万一 GitHub 哪天恢复调度就自动能用），
+    #   但**不要指望它**。真正的定时更新走外部调度器打 dispatch 接口：
+    #     POST /repos/<owner>/<repo>/actions/workflows/refresh-data.yml/dispatches
+    #     Authorization: Bearer <fine-grained PAT>
+    #     {"ref":"main"}
+    #   详见 docs/新建仓库并推送.md §2.7，触发脚本：tools/dispatch-refresh.mjs
+    #
+    # 分钟数用 11/31/51（错开整点与半点）：整点是 GitHub 调度最拥堵的时刻，
+    # 高峰期定时任务会被延迟甚至整段丢弃。
     - cron: '11,31,51 * * * *'
   # 外部调度器（如 uptime-kuma / cron-job.org）也可以用 PAT 打这个事件来触发，
   # 作为 GitHub 自带 cron 不准时的备用通道。
