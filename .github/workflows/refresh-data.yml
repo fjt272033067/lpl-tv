@@ -35,14 +35,32 @@ on:
     # 每 20 分钟一次。B 站直播流地址有效期约 60 分钟，必须在过期前重签；
     # 赛程 / 录像目录跟着一起刷新。
     #
-    # 分钟数用 7/27/47（错开整点与半点）：整点是 GitHub 调度最拥堵的时刻，
+    # 分钟数用 11/31/51（错开整点与半点）：整点是 GitHub 调度最拥堵的时刻，
     # 高峰期定时任务会被延迟甚至整段丢弃。
     #
-    # ⚠️ 改了这段 cron 要「推上去」才能让 GitHub 重新注册调度 ——
-    # 新建仓库首次 push 时，schedule 常常静默没注册上（表现：workflow 显示
-    # active、workflow_dispatch 手动能跑，但 event=schedule 的 run 一条都没有）。
-    # 改 cron 表达式再推一次即可重新注册。
-    - cron: '7,27,47 * * * *'
+    # ⚠️⚠️ 改了这段 cron 必须「推上去」才能让 GitHub 重新注册调度，
+    # 而且**提交者身份必须是 GitHub 能识别的账号**，否则调度永远注册不上。
+    #
+    # 这个坑真的踩过（实测 2026-10-30）：仓库建好后 event=schedule 的 run 一条都没有，
+    # 而 workflow 明明是 active、workflow_dispatch 手动也能跑、push 触发器照常触发。
+    # 根因是本仓库的 git 邮箱填的是 fangchen@localhost —— 这个地址在 GitHub 上
+    # 没有对应任何账号，提交在 API 里 author/committer 全是 null。
+    # 而 GitHub 的定时调度是「绑定到最后一次修改 cron 那一行提交的身份」的：
+    # 提交者归属不到账号 → 调度没有归属人 → GitHub 根本不创建这条 schedule。
+    #
+    # 排查判据（一眼定位）：
+    #   GET /repos/<owner>/<repo>/commits/<改了 cron 的那次提交>
+    #   → 顶层 author.login / committer.login 必须是账号名；是 null 就是这个问题。
+    #
+    # 修复：把仓库级 git 身份改成 GitHub 可验证的 noreply 邮箱再提交一次：
+    #   git config user.email "<数字ID>+<用户名>@users.noreply.github.com"
+    #   git config user.name  "<用户名>"
+    # 然后改一次 cron 表达式并推送 —— 两个动作能一次做完最好。
+    - cron: '11,31,51 * * * *'
+  # 外部调度器（如 uptime-kuma / cron-job.org）也可以用 PAT 打这个事件来触发，
+  # 作为 GitHub 自带 cron 不准时的备用通道。
+  repository_dispatch:
+    types: [refresh-data]
   workflow_dispatch:
     inputs:
       vods:
