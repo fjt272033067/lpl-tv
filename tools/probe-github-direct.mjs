@@ -34,10 +34,10 @@ function get(ip, host, path) {
 const ips = await doh('github.com');
 console.log('真实 github.com IP:', ips.join(', '));
 for (const [host, path] of [
-  ['github.com', '/fj272033067'],
-  ['github.com', '/fj272033067/lpl-tv'],
-  ['api.github.com', '/repos/fj272033067/lpl-tv'],
-  ['api.github.com', '/users/fj272033067'],
+  ['github.com', '/fjt272033067'],
+  ['github.com', '/fjt272033067/lpl-tv'],
+  ['api.github.com', '/repos/fjt272033067/lpl-tv'],
+  ['api.github.com', '/users/fjt272033067'],
 ]) {
   const r = await get(ips[0], host, path);
   let extra = '';

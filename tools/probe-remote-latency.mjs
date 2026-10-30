@@ -22,7 +22,7 @@ const r = await page.evaluate(async () => {
   });
   const t0 = performance.now();
   try {
-    const res = await fetch('https://raw.githubusercontent.com/fj272033067/lpl-tv/main/site/data/version.json');
+    const res = await fetch('https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data/version.json');
     out.timing = { status: res.status, ms: Math.round(performance.now() - t0) };
   } catch (e) {
     out.timing = { error: String(e && e.message), ms: Math.round(performance.now() - t0) };
