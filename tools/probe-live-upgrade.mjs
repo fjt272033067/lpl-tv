@@ -64,7 +64,8 @@ while (Date.now() - t0 < MAX_WAIT * 1000) {
     const banner = document.getElementById('data-channel-banner');
     return {
       state: st.state || '',
-      base: (st.base || '').slice(-52),
+      // 完整 base（别在这里截断：后面要解析主机名，截了就只剩一段路径）
+      base: st.base || '',
       origin: st.origin || '',
       liveUpdatedAt: st.liveUpdatedAt || '',
       banner: banner ? banner.textContent.replace(/\s+/g, ' ').slice(0, 70) : '',
@@ -77,7 +78,7 @@ while (Date.now() - t0 < MAX_WAIT * 1000) {
     localLiveStamp && s.liveUpdatedAt && Date.parse(s.liveUpdatedAt) > Date.parse(localLiveStamp);
   console.log(
     `  t+${((Date.now() - t0) / 1000).toFixed(0)}s  ` +
-      JSON.stringify(s) +
+      JSON.stringify({ ...s, base: s.base.slice(-46) }) +
       (upgraded ? '   ← 已升级到更新的远端' : '')
   );
   if (upgraded) break;
