@@ -149,7 +149,6 @@ function check(name, pass, detail) {
   });
   console.log('   ' + JSON.stringify(live));
   check('直播页渲染出播放器', live.hasVideo);
-  check('直播页加载出赛事侧栏', live.sideRows > 0 || live.state.length > 0);
 
   // 判断「当前有没有赛事在播」——验收判据必须对外部状态免疫：
   // 休赛期（腾讯常驻房无流、B 站流地址也已过期）时，页面给明确提示就是正确行为，
@@ -169,9 +168,20 @@ function check(name, pass, detail) {
   });
   console.log('   信号状态: ' + JSON.stringify(signal));
   global.__hasSignal = signal.hasFrame;
-  // 清晰度档位随线路变化：腾讯源多档、B 站源单档（未登录最高高清）。
-  // 判据是「菜单如实给出当前线路的档位」，而不是硬编码 3 档。
-  check('直播清晰度菜单有可用档位', live.qualityMenu >= 1, 'quality items=' + live.qualityMenu);
+
+  // 赛事侧栏与清晰度档位，只在「真的在播」时才有意义：
+  // 没有信号时它们本来就不存在，页面给明确提示才是正确行为，
+  // 拿它们判失败等于「拿休赛当回归」（这条判据以前就是这么误报的）。
+  if (signal.hasFrame) {
+    check('直播页加载出赛事侧栏', live.sideRows > 0, 'sideRows=' + live.sideRows);
+    // 清晰度档位随线路变化：腾讯源多档、B 站源单档（未登录最高高清）。
+    // 判据是「菜单如实给出当前线路的档位」，而不是硬编码 3 档。
+    check('直播清晰度菜单有可用档位', live.qualityMenu >= 1, 'quality items=' + live.qualityMenu);
+  } else {
+    console.log(
+      '   · 当前无直播信号（休赛期/地址过期）：赛事侧栏与清晰度档位判据本轮不适用，不计入验收'
+    );
+  }
 
   // 关键判据：直播必须真的解码出画面（不能只验证播放器元素存在）。
   // 之前腾讯锚点的失效流就是「元素在、尺寸为 0、画面全黑」——
@@ -764,6 +774,52 @@ function check(name, pass, detail) {
   console.log('   今天起的赛程: ' + JSON.stringify(soon));
   check('赛程页有「今天起的赛程」速览', soon.n > 0, soon.n + ' 行 ' + JSON.stringify(soon.sample));
   check('速览里的场次可直接点录播', soon.play > 0, 'play=' + soon.play);
+
+  /* ---------------- 远端自动重绘的竞态回归 ---------------- */
+  // 背景：远端数据到位会触发「自动重绘」。如果本地快照还在加载中，旧渲染晚到就会
+  // 在新渲染之后再次「清空 + 回填」，页面留下两份内容 —— 实测出现过两份赛程，
+  // 上面那份是新的、下面那份是旧的（往下滚就能看到）。
+  // 这里人为制造「本地慢、远端快」，断言页面里只有一份赛程。
+  const racePage = await ctx.newPage();
+  let localHits = 0;
+  await racePage.route(/127\.0\.0\.1:\d+\/data\/schedule\.json/, async (route) => {
+    localHits++;
+    if (localHits === 1) await new Promise((r) => setTimeout(r, 2500)); // 第一次故意慢
+    await route.continue();
+  });
+  const raceVer = JSON.parse(fs.readFileSync(path.join(SITE, 'data', 'version.json'), 'utf8'));
+  const newer = new Date(Date.parse(raceVer.updatedAt) + 3600 * 1000).toISOString();
+  const raceSched = fs.readFileSync(path.join(SITE, 'data', 'schedule.json'), 'utf8');
+  const raceCat = fs.readFileSync(path.join(SITE, 'data', 'catalog.json'), 'utf8');
+  await racePage.route('https://raw.githubusercontent.com/**/version.json*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify({ updatedAt: newer, files: { schedule: newer, catalog: newer, liverooms: newer } }),
+    })
+  );
+  await racePage.route('https://raw.githubusercontent.com/**/schedule.json*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: raceSched })
+  );
+  await racePage.route('https://raw.githubusercontent.com/**/catalog.json*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: raceCat })
+  );
+  await racePage.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
+  await racePage.waitForTimeout(12000);
+  const dup = await racePage.evaluate(() => ({
+    heads: document.querySelectorAll('#view .section-head').length,
+    brackets: document.querySelectorAll('#view .bracket-event').length,
+    soon: document.querySelectorAll('#view .sched-soon').length,
+    stamp: (document.querySelector('#view .updated-at') || {}).textContent || '',
+  }));
+  console.log('   竞态渲染: ' + JSON.stringify(dup));
+  check(
+    '远端自动重绘后页面没有重复内容',
+    dup.heads === 1 && dup.brackets === 1 && dup.soon === 1,
+    'section-head=' + dup.heads + ' bracket=' + dup.brackets + ' soon=' + dup.soon
+  );
+  check('远端自动重绘后用的是远端那份数据', /远端实时数据/.test(dup.stamp), dup.stamp);
+  await racePage.close();
 
   // 赛程行点击看录播：分两类
   //   ① 腾讯已发录像 → 点行进入本站播放页（hash 变为 #/watch/<vid>）

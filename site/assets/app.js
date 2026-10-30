@@ -1712,6 +1712,20 @@
    * ------------------------------------------------------------------ */
   const view = $('#view');
 
+  /**
+   * 渲染代次守卫。
+   *
+   * 远端数据到位会触发「自动重绘」，用户也可能连点切页 —— 这时会有两个渲染同时在跑。
+   * 渲染的过程是「先 view.innerHTML = '' 清空，再逐块回填」，中间只要有 await，
+   * 两个渲染就会交错：旧渲染晚到就会在页面上多留一份重复内容
+   * （实测踩过：赛程页出现两份赛程 —— 一份新数据、一份旧数据）。
+   *
+   * 所以每次渲染领一个号；只有最新一代允许改 DOM，过期的那一代直接放弃。
+   */
+  let renderSeq = 0;
+  const beginRender = () => ++renderSeq;
+  const isStaleRender = (seq) => seq !== renderSeq;
+
   function setNav(key) {
     $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === key));
   }
@@ -1929,6 +1943,7 @@
   }
 
   async function renderLive() {
+    const seq = beginRender();
     setNav('live');
     loading('正在连接直播源…');
 
@@ -2095,6 +2110,11 @@
       playable.find((s) => s.kind === 'bili') ||
       null;
 
+    // ⚠️ 直播页只改 view 的两个点：清空 与 最终挂载。
+    // 中间的 await 都在离屏的 left/hero 上做，不会污染页面 —— 所以不必把 await 全前移
+    // （那会让首屏被 nextFixture 之类的慢调用阻塞，实测会导致直播页迟迟出不来）。
+    // 防重复渲染靠代次守卫：过期渲染既不许清空、也不许挂载。
+    if (isStaleRender(seq)) return;
     view.innerHTML = '';
     const hero = el('div', { class: 'hero' });
     const left = el('div');
@@ -2566,6 +2586,7 @@
 
     // 注意：侧栏已在 applySource() 内渲染过一次，这里不要重复追加
     // （重复追加会让「比赛信息卡片」在页面上出现两组完全相同的内容）
+    if (isStaleRender(seq)) return; // 过期渲染不许挂载，否则会盖掉新渲染的内容
     view.appendChild(hero);
 
     // 线路卡片：分两组 —— 本站直连 / 平台官方直播间（更高画质）
@@ -2838,6 +2859,7 @@
   const vodState = { season: '', team: '', q: '', page: 1, per: 24 };
 
   async function renderVod() {
+    const seq = beginRender();
     setNav('vod');
     loading('正在加载录像库…');
     // 后台探测到更新的远端数据时自动重绘（录像目录也会随 CI 更新）
@@ -2898,6 +2920,7 @@
     // 按时间倒序：官方最新发布的条目自然排在最前
     filtered.sort((a, b) => ((b.date || '') > (a.date || '') ? 1 : (b.date || '') < (a.date || '') ? -1 : 0));
 
+    if (isStaleRender(seq)) return;
     view.innerHTML = '';
     const head = el('div', { class: 'section-head' }, [
       el('h2', { text: '录像库' }),
@@ -3014,6 +3037,7 @@
 
   /* ---------------- 播放页 ---------------- */
   async function renderWatch(id) {
+    const seq = beginRender();
     setNav('vod');
     loading('正在获取播放地址…');
     let cat;
@@ -3048,6 +3072,7 @@
       };
     }
 
+    if (isStaleRender(seq)) return;
     view.innerHTML = '';
     const wrap = el('div', { class: 'watch' });
     const left = el('div');
@@ -3129,6 +3154,7 @@
     tip.appendChild(kv2);
     side.appendChild(tip);
     wrap.appendChild(side);
+    if (isStaleRender(seq)) return; // 过期渲染不许挂载（否则会盖掉新渲染的播放页）
     view.appendChild(wrap);
 
     // 取播放地址（腾讯生成 vkey 偶尔超时，重试一次再放弃）
@@ -3252,6 +3278,7 @@
   }
 
   async function renderSchedule() {
+    const seq = beginRender();
     setNav('schedule');
     loading('正在加载赛程…');
     // 后台探测到更新的远端数据时自动重绘（赛程是「自动更新」的主角）
@@ -3269,7 +3296,9 @@
       errorState('赛程加载失败', e.message, () => renderSchedule());
       return;
     }
+    if (isStaleRender(seq)) return;
     await ensureTeamLogos();
+    if (isStaleRender(seq)) return;
     const now = Date.now();
 
     // 实时覆盖：正在进行的比赛用腾讯实时数据刷新比分（跨域可读，零构建期依赖）
@@ -3280,6 +3309,7 @@
     } catch (e) {
       /* 覆盖失败就用构建期快照 */
     }
+    if (isStaleRender(seq)) return;
 
     const filtered = list.filter((m) => {
       if (schedState.game && m.game !== schedState.game) return false;
@@ -3296,10 +3326,13 @@
     const games = Array.from(evMaxDate.keys());
     games.sort((a, b) => ((evMaxDate.get(b) || '') > (evMaxDate.get(a) || '') ? 1 : -1));
 
-    view.innerHTML = '';
-    const fresh = scheduleFreshness(Repo.scheduleMeta, list);
+    // ⚠️ 所有 await 必须在「清空 + 回填」之前完成 —— 否则并发渲染会交错，页面会留下重复内容
     const evInfos = await ensureEventInfo();
+    if (isStaleRender(seq)) return;
     const curEvent = pickCurrentEvent(evInfos, list);
+    const fresh = scheduleFreshness(Repo.scheduleMeta, list);
+
+    view.innerHTML = '';
     const head = el('div', { class: 'section-head' }, [
       el('h2', { text: '赛事赛程' }),
       el('span', { text: '共 ' + list.length + ' 场 · 对阵图对齐腾讯 LPL 官方「赛事进度」' }),

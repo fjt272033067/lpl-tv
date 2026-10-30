@@ -34,7 +34,15 @@ on:
   schedule:
     # 每 20 分钟一次。B 站直播流地址有效期约 60 分钟，必须在过期前重签；
     # 赛程 / 录像目录跟着一起刷新。
-    - cron: '13,33,53 * * * *'
+    #
+    # 分钟数用 7/27/47（错开整点与半点）：整点是 GitHub 调度最拥堵的时刻，
+    # 高峰期定时任务会被延迟甚至整段丢弃。
+    #
+    # ⚠️ 改了这段 cron 要「推上去」才能让 GitHub 重新注册调度 ——
+    # 新建仓库首次 push 时，schedule 常常静默没注册上（表现：workflow 显示
+    # active、workflow_dispatch 手动能跑，但 event=schedule 的 run 一条都没有）。
+    # 改 cron 表达式再推一次即可重新注册。
+    - cron: '7,27,47 * * * *'
   workflow_dispatch:
     inputs:
       vods:
