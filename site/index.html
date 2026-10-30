@@ -15,9 +15,18 @@
       填成「含 schedule.json / catalog.json / liverooms.json 的目录」后，站点会把本地与
       远端两份都读回来并按 updatedAt 取更新的那份 —— 于是 CI 每次重建只要把 site/data
       提交到公开仓库，赛程与直播源就能日更，不必重新部署站点本身。
-      例：https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/site/data
+
+      为什么要有「镜像」列表：raw.githubusercontent.com 在中国大陆经常连不上
+      （本机实测：Chrome 直接 fetch 立刻失败，走系统代理的 PowerShell 才通 ——
+      浏览器不继承那套代理）。只押一个源，用户浏览器一旦拿不到远端，就只能一直
+      用本地快照，于是出现「CI 明明更新了数据、页面却还是旧的」这种静默失败。
+      站点会并发探测这些镜像，先返回的先用；探不通的先记 30 分钟不来烦用户。
     -->
     <meta name="lpl-tv-data-base" content="https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data" />
+    <meta
+      name="lpl-tv-data-mirrors"
+      content="https://gcore.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data, https://cdn.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data, https://fastly.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data"
+    />
     <!-- 微信/QQ 内置浏览器（X5）适配 -->
     <meta name="x5-orientation" content="landscape" />
     <meta name="x5-fullscreen" content="true" />

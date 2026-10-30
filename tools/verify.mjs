@@ -79,6 +79,11 @@ function check(name, pass, detail) {
   await ctx.route('https://raw.githubusercontent.com/**', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: '{}' })
   );
+  // jsDelivr 镜像也一样拦掉：本地验收不该去碰真实 CDN，
+  // 否则「谁先返回谁生效」的镜像竞速会打到网络，判据变得不确定。
+  await ctx.route(/jsdelivr\.net/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: '{}' })
+  );
   const page = await ctx.newPage();
 
   const consoleErrors = [];
@@ -802,6 +807,21 @@ function check(name, pass, detail) {
     route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: raceSched })
   );
   await racePage.route('https://raw.githubusercontent.com/**/catalog.json*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: raceCat })
+  );
+  // 镜像也要喂同一份假数据：站点现在会并发探测多个镜像，
+  // 只 mock 主源的话，谁先返回谁生效就成了网络竞速，判据会飘。
+  await racePage.route(/jsdelivr\.net.*\/version\.json/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify({ updatedAt: newer, files: { schedule: newer, catalog: newer, liverooms: newer } }),
+    })
+  );
+  await racePage.route(/jsdelivr\.net.*\/schedule\.json/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: raceSched })
+  );
+  await racePage.route(/jsdelivr\.net.*\/catalog\.json/, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: raceCat })
   );
   await racePage.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });

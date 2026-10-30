@@ -208,20 +208,52 @@
    *   · 站点本身依然是纯静态、零后端。
    *
    * 配置方式：index.html 里的 <meta name="lpl-tv-data-base" content="…">，
-   * 或运行时设置 window.__LPLTV_DATA_BASE__（测试用）。留空 = 只用本地快照。
+   * 额外镜像写 <meta name="lpl-tv-data-mirrors" content="a,b">（逗号或空格分隔），
+   * 或运行时设置 window.__LPLTV_DATA_BASE__ / __LPLTV_DATA_MIRRORS__（测试用）。
+   * 留空 = 只用本地快照。
+   *
+   * ⚠️ 必须支持**多个镜像**：raw.githubusercontent.com 在中国大陆经常连不上
+   * （本机实测 Chrome 直接 fetch 立刻失败，而走系统代理的 PowerShell 却能通
+   * —— 浏览器不继承那套代理）。只押一个源，用户浏览器一旦拿不到远端，
+   * 就只能一直用本地快照，于是出现「CI 明明更新了数据、页面却还是旧的」
+   * 这种静默失败。镜像之间「先到先用」，探不通的会先记 30 分钟不来烦用户。
    */
-  function readDataBase() {
+  function readDataBases() {
+    const out = [];
+    const push = (v) => {
+      if (typeof v !== 'string') return;
+      const s = v.trim().replace(/\/+$/, '');
+      if (s && out.indexOf(s) === -1) out.push(s);
+    };
     try {
+      // 运行时覆盖 = **整体替换**，不是追加。
+      // 验收脚本靠它把远端指到本地的假服务器上；要是变成「追加」，
+      // 页面会同时去探测 meta 里那些真实镜像，谁先返回谁说了算 —— 判据就测偏对象了。
       const w = window.__LPLTV_DATA_BASE__;
-      if (typeof w === 'string' && w.trim()) return w.trim().replace(/\/+$/, '');
+      if (typeof w === 'string' && w.trim()) {
+        push(w);
+        const wm = window.__LPLTV_DATA_MIRRORS__;
+        if (Array.isArray(wm)) wm.forEach(push);
+        else if (typeof wm === 'string') wm.split(/[,\s]+/).forEach(push);
+        return out;
+      }
     } catch (e) {
       /* 非浏览器环境 */
     }
-    const m = document.querySelector('meta[name="lpl-tv-data-base"]');
-    const v = m ? (m.getAttribute('content') || '').trim() : '';
-    return v.replace(/\/+$/, '');
+    try {
+      const m = document.querySelector('meta[name="lpl-tv-data-base"]');
+      push(m ? m.getAttribute('content') : '');
+      const mm = document.querySelector('meta[name="lpl-tv-data-mirrors"]');
+      const mv = mm ? mm.getAttribute('content') || '' : '';
+      if (mv) mv.split(/[,\s]+/).forEach(push);
+    } catch (e) {
+      /* 没有 meta 就只用本地快照 */
+    }
+    return out;
   }
-  const REMOTE_DATA_BASE = readDataBase();
+  const REMOTE_DATA_BASES = readDataBases();
+  /** 主基址（保留旧名，部分旧代码仍在用） */
+  const REMOTE_DATA_BASE = REMOTE_DATA_BASES[0] || '';
 
   /** 带超时的 JSON 抓取：远端不可用时返回 null，绝不拖慢首屏、也不抛错 */
   async function fetchJson(url, timeoutMs) {
@@ -273,19 +305,136 @@
    */
   const REMOTE_VER_KEY = 'lpltv-remote-ver';
   const REMOTE_VER_TTL = 5 * 60 * 1000;
+  /** 探不通的基址：先记 30 分钟，别让每次加载都去撞同一堵墙 */
+  const REMOTE_DEAD_KEY = 'lpltv-remote-dead';
+  const REMOTE_DEAD_TTL = 30 * 60 * 1000;
+
+  /**
+   * 数据通道状态：远端通不通、生效的是远端还是本地、失败原因。
+   * 页面横幅与验收脚本都读它 —— **不允许静默失败**。
+   */
+  const DataStatus = {
+    state: 'unknown', // 'unknown' | 'ok' | 'failed'
+    ok: false,
+    base: '',        // 实际生效的基址
+    origin: 'local', // 'remote' | 'local'
+    reason: '',      // 失败原因（中文，直接显示）
+    tried: 0,        // 试了几个基址
+    updatedAt: '',   // 生效数据的 updatedAt
+    checkedAt: 0,
+  };
+  function setDataStatus(patch) {
+    Object.assign(DataStatus, patch);
+    DataStatus.checkedAt = Date.now();
+    try {
+      window.__LPLTV_DATA_STATUS__ = DataStatus;
+    } catch (e) {
+      /* 非浏览器环境 */
+    }
+    try {
+      renderChannelBanner();
+    } catch (e) {
+      /* 横幅渲染失败不影响主流程 */
+    }
+  }
+
+  /** 「多久之前」的人话 */
+  function channelAgeLabel(iso) {
+    const t = Date.parse(iso || '');
+    if (!isFinite(t)) return '时间未知';
+    const min = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (min < 1) return '不到 1 分钟前';
+    if (min < 60) return min + ' 分钟前';
+    const h = Math.floor(min / 60);
+    if (h < 24) return h + ' 小时' + (min % 60 ? ' ' + (min % 60) + ' 分钟' : '') + '前';
+    return Math.floor(h / 24) + ' 天前';
+  }
+
+  /** 手动重试数据通道：清掉「探不通」的记账，重新探测 */
+  function retryRemoteChannel() {
+    try {
+      sessionStorage.removeItem(REMOTE_DEAD_KEY);
+      sessionStorage.removeItem(REMOTE_VER_KEY);
+    } catch (e) {
+      /* 忽略 */
+    }
+    remoteRetryCount = 0;
+    if (remoteProbeInFlight) return;
+    remoteProbeInFlight = true;
+    probeRemoteVersion('?t=' + Date.now()).then((r) => {
+      remoteProbeInFlight = false;
+      applyProbeResult(r);
+    });
+  }
+
+  /**
+   * 数据通道横幅：**远端连不通时必须明说**，否则「暂无直播信号」这种含糊提示
+   * 会替真正的故障背锅 —— 用户以为赛事没开，实际是数据通道挂了。
+   */
+  function renderChannelBanner() {
+    let box = document.getElementById('data-channel-banner');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'data-channel-banner';
+      box.className = 'data-channel';
+      document.body.appendChild(box);
+    }
+    if (DataStatus.state !== 'failed') {
+      box.style.display = 'none';
+      box.innerHTML = '';
+      return;
+    }
+    box.style.display = '';
+    box.innerHTML = '';
+    box.appendChild(
+      el('span', { class: 'dc-icon', text: '!' })
+    );
+    box.appendChild(
+      el('div', { class: 'dc-text' }, [
+        el('b', { text: '数据通道暂时不可达（已尝试 ' + (DataStatus.tried || REMOTE_DATA_BASES.length) + ' 个远端镜像）' }),
+        el('p', {
+          text:
+            '当前显示的是 ' +
+            channelAgeLabel(DataStatus.updatedAt) +
+            '的本地快照。腾讯的直播信号仍会实时更新，但 B 站线路与清晰度依赖远端快照，' +
+            '流地址可能已失效。可点「重新拉取」重试。',
+        }),
+      ])
+    );
+    box.appendChild(el('button', { class: 'dc-retry', text: '重新拉取', onclick: () => retryRemoteChannel() }));
+  }
+
   /** 后台探测到更新的远端数据时的回调（页面注册，用来自动重绘） */
   let remoteUpgradeHook = null;
   let remoteProbeInFlight = false;
+  /**
+   * 探测到「远端更新」但**当时还没有页面注册回调** → 记在这里，谁后注册谁接手。
+   * 否则这次升级会被静默丢掉：页面永远停在旧数据上，且没有任何报错。
+   * （实测踩过：探测比 renderLive 注册回调还快，升级就丢了。）
+   */
+  let pendingUpgrade = null;
   function onRemoteUpgrade(fn) {
     remoteUpgradeHook = fn;
+    if (pendingUpgrade) {
+      const v = pendingUpgrade;
+      pendingUpgrade = null;
+      setTimeout(() => {
+        try {
+          fn(v);
+        } catch (e) {
+          /* 忽略 */
+        }
+      }, 0);
+    }
     return () => {
       if (remoteUpgradeHook === fn) remoteUpgradeHook = null;
     };
   }
-  function readRemoteVer(base) {
+
+  function readRemoteVer() {
     try {
       const c = JSON.parse(sessionStorage.getItem(REMOTE_VER_KEY) || 'null');
-      if (!c || c.base !== base || !c.ts) return null;
+      if (!c || !c.ts) return null;
       if (Date.now() - c.ts > REMOTE_VER_TTL) return null;
       return c;
     } catch (e) {
@@ -297,7 +446,7 @@
       sessionStorage.setItem(
         REMOTE_VER_KEY,
         JSON.stringify({
-          base,
+          base: base || '',
           ts: Date.now(),
           updatedAt: (ver && ver.updatedAt) || '',
           files: (ver && ver.files) || null,
@@ -308,28 +457,189 @@
       /* 隐私模式下 sessionStorage 不可用，忽略 */
     }
   }
+  function deadBases() {
+    try {
+      const c = JSON.parse(sessionStorage.getItem(REMOTE_DEAD_KEY) || '{}');
+      const now = Date.now();
+      const out = {};
+      Object.keys(c).forEach((b) => {
+        if (now - c[b] > REMOTE_DEAD_TTL) delete c[b];
+        else out[b] = c[b];
+      });
+      return out;
+    } catch (e) {
+      return {};
+    }
+  }
+  function markDead(base) {
+    try {
+      const c = JSON.parse(sessionStorage.getItem(REMOTE_DEAD_KEY) || '{}');
+      c[base] = Date.now();
+      sessionStorage.setItem(REMOTE_DEAD_KEY, JSON.stringify(c));
+    } catch (e) {
+      /* 忽略 */
+    }
+  }
+  function clearDead(base) {
+    try {
+      const c = JSON.parse(sessionStorage.getItem(REMOTE_DEAD_KEY) || '{}');
+      if (c[base]) {
+        delete c[base];
+        sessionStorage.setItem(REMOTE_DEAD_KEY, JSON.stringify(c));
+      }
+    } catch (e) {
+      /* 忽略 */
+    }
+  }
+
+  /**
+   * 并发跑多个候选，**第一个「有结果」的赢**（失败的不算，快的失败也不算）。
+   * @param {Array} items 候选
+   * @param {(item:any)=>Promise<any>} runner
+   */
+  function firstSuccess(items, runner) {
+    return new Promise((resolve) => {
+      if (!items || !items.length) return resolve(null);
+      let done = false;
+      let left = items.length;
+      items.forEach((it) => {
+        let settled = false;
+        const finish = (v) => {
+          if (settled) return;
+          settled = true;
+          if (v) {
+            if (!done) {
+              done = true;
+              resolve(v);
+            }
+          } else if (--left === 0 && !done) {
+            done = true;
+            resolve(null);
+          }
+        };
+        try {
+          Promise.resolve(runner(it)).then(finish, () => finish(null));
+        } catch (e) {
+          finish(null);
+        }
+      });
+    });
+  }
+
+  /** 并行探测所有镜像，谁先返回合法 version.json 就用谁 */
+  function probeRemoteVersion(bust) {
+    const dead = deadBases();
+    const cands = REMOTE_DATA_BASES.filter((b) => !dead[b]);
+    if (!cands.length) return Promise.resolve(null);
+    return firstSuccess(cands, (b) =>
+      fetchJson(b + '/version.json' + bust, 3500).then((v) => (v ? { base: b, ver: v } : null))
+    ).then((r) => {
+      if (r) clearDead(r.base);
+      else cands.forEach(markDead);
+      return r;
+    });
+  }
+
+  /** 从远端取一份数据：按基址顺序并发试，谁先成功用谁 */
+  async function fetchRemoteJson(name, contentStamp, bust) {
+    if (!REMOTE_DATA_BASES.length) return null;
+    const dead = deadBases();
+    const order = REMOTE_DATA_BASES.filter((b) => !dead[b]);
+    if (!order.length) return null;
+    const q = contentStamp ? '?v=' + encodeURIComponent(contentStamp) : bust;
+    const r = await firstSuccess(order, (b) =>
+      fetchJson(b + '/' + name + '.json' + q, 6000).then((j) => (j ? { base: b, json: j } : null))
+    );
+    if (r) {
+      clearDead(r.base);
+      return r;
+    }
+    order.forEach(markDead);
+    return null;
+  }
+
+  /** 本地数据的版本时间（探测回来后用来判断远端是否更新） */
+  let lastLocalVerUpdatedAt = '';
+
+  let remoteRetryTimer = null;
+  let remoteRetryCount = 0;
+
+  /** 处理一次探测结果：写缓存 → 更新状态 → 必要时触发升级重绘 */
+  function applyProbeResult(r) {
+    if (!r) {
+      writeRemoteVer('', null, true);
+      setDataStatus({
+        state: 'failed',
+        ok: false,
+        reason: '所有远端镜像都连不上',
+        tried: REMOTE_DATA_BASES.length,
+      });
+      scheduleRemoteRetry();
+      return;
+    }
+    remoteRetryCount = 0;
+    writeRemoteVer(r.base, r.ver, false);
+    setDataStatus({
+      state: 'ok',
+      ok: true,
+      base: r.base,
+      reason: '',
+      tried: REMOTE_DATA_BASES.length,
+      updatedAt: r.ver.updatedAt || '',
+    });
+    // 远端比本地新 → 触发重绘（页面还没注册回调就先存着，等它注册）
+    if (Date.parse(r.ver.updatedAt || '') > Date.parse(lastLocalVerUpdatedAt || '')) {
+      pendingUpgrade = r.ver;
+      if (remoteUpgradeHook) {
+        const v = pendingUpgrade;
+        pendingUpgrade = null;
+        try {
+          remoteUpgradeHook(v);
+        } catch (e) {
+          /* 忽略 */
+        }
+      }
+    }
+  }
+
+  /** 远端探不通时每 45 秒重试一次（页面不可见时不重试） */
+  function scheduleRemoteRetry() {
+    if (remoteRetryTimer || !REMOTE_DATA_BASES.length) return;
+    remoteRetryTimer = setTimeout(() => {
+      remoteRetryTimer = null;
+      if (remoteRetryCount++ > 40) return;
+      if (document.hidden) {
+        scheduleRemoteRetry();
+        return;
+      }
+      if (!remoteProbeInFlight) {
+        remoteProbeInFlight = true;
+        probeRemoteVersion('?t=' + Date.now()).then((r) => {
+          remoteProbeInFlight = false;
+          applyProbeResult(r);
+        });
+      }
+    }, 45000);
+  }
 
   async function loadDataFile(name, force) {
     const bust = force ? '?t=' + Date.now() : '';
     const localVer = await fetchJson('data/version.json' + bust, 0);
+    if (localVer && localVer.updatedAt) lastLocalVerUpdatedAt = localVer.updatedAt;
     let remoteVer = null;
-    if (REMOTE_DATA_BASE) {
-      const cached = readRemoteVer(REMOTE_DATA_BASE);
-      if (cached) {
+    if (REMOTE_DATA_BASES.length) {
+      const cached = readRemoteVer();
+      if (cached && cached.base && !deadBases()[cached.base]) {
         // 已经有探测结果：直接用，不发请求
         remoteVer = cached.failed ? null : { updatedAt: cached.updatedAt, files: cached.files };
-      } else {
+        if (cached.failed) scheduleRemoteRetry();
+      } else if (!remoteProbeInFlight) {
         // 首次探测：放后台跑，**不 await** —— 首屏不能等它
-        if (!remoteProbeInFlight) {
-          remoteProbeInFlight = true;
-          fetchJson(REMOTE_DATA_BASE + '/version.json' + bust, 4000).then((v) => {
-            remoteProbeInFlight = false;
-            writeRemoteVer(REMOTE_DATA_BASE, v, !v);
-            if (v && remoteUpgradeHook && Date.parse(v.updatedAt || '') > Date.parse(localVer?.updatedAt || '')) {
-              remoteUpgradeHook(v);
-            }
-          });
-        }
+        remoteProbeInFlight = true;
+        probeRemoteVersion(bust).then((r) => {
+          remoteProbeInFlight = false;
+          applyProbeResult(r);
+        });
       }
     }
     const ver = pickNewer(localVer, remoteVer); // 「刷新时间」取新的那份
@@ -338,16 +648,25 @@
 
     if (lv && rv && Date.parse(rv) > Date.parse(lv)) {
       // 远端内容更新 → 取远端（内容时间戳拼进 URL 当缓存键：内容没变就命中缓存）
-      const j = await fetchJson(REMOTE_DATA_BASE + '/' + name + '.json?v=' + encodeURIComponent(rv), 8000);
-      if (j) return { json: j, origin: 'remote', ver };
+      const got = await fetchRemoteJson(name, rv, bust);
+      if (got) {
+        setDataStatus({ state: 'ok', ok: true, base: got.base, origin: 'remote' });
+        return { json: got.json, origin: 'remote', ver, base: got.base };
+      }
     }
     // 其余情况一律用本地（远端不可用 / 内容不比本地新 / 还没探测出远端版本）
     const local = await fetchJson('data/' + name + '.json' + bust, 0);
-    if (local) return { json: local, origin: 'local', ver };
+    if (local) {
+      setDataStatus({ origin: 'local', updatedAt: local.updatedAt || lastLocalVerUpdatedAt });
+      return { json: local, origin: 'local', ver };
+    }
     // 本地也没有 → 最后才试远端
-    if (REMOTE_DATA_BASE) {
-      const j = await fetchJson(REMOTE_DATA_BASE + '/' + name + '.json' + bust, 8000);
-      if (j) return { json: j, origin: 'remote', ver };
+    if (REMOTE_DATA_BASES.length) {
+      const got = await fetchRemoteJson(name, '', bust);
+      if (got) {
+        setDataStatus({ state: 'ok', ok: true, base: got.base, origin: 'remote' });
+        return { json: got.json, origin: 'remote', ver, base: got.base };
+      }
     }
     return { json: null, origin: 'local', ver };
   }
@@ -3200,7 +3519,10 @@
         /* 本地无弹幕数据，继续试远端 */
       }
       // 远端数据源里可能带着更新的弹幕（新比赛在 CI 重建后才抓到）
-      if (!dj && REMOTE_DATA_BASE) dj = await fetchJson(REMOTE_DATA_BASE + '/dm/' + m.cid + '.json', 6000);
+      if (!dj && REMOTE_DATA_BASES.length) {
+        const gotDm = await fetchRemoteJson('dm/' + m.cid, '', '');
+        if (gotDm) dj = gotDm.json;
+      }
       if (dj) {
         try {
           dm.load(dj.items || []);

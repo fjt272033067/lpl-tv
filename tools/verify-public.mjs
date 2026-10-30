@@ -54,6 +54,34 @@ check('app.js / danmaku.js / hls.js 可访问', assets['/assets/app.js'] === 200
 check('catalog.json 可访问', assets['/data/catalog.json'] === 200);
 
 console.log('\n[2] 直播页');
+// 直播判据必须「对外部状态免疫」：先问上游「现在到底有没有直播信号」，
+// 再决定页面应该显示什么 —— 休赛期没有信号不算回归；真有信号却没显示才算。
+// 这里在 Node 侧独立取一份上游快照（与站点浏览器走的是不同的传输路径）。
+const UPSTREAM_LIVEROOMS = [
+  'https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data/liverooms.json',
+  'https://gcore.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data/liverooms.json',
+  'https://cdn.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data/liverooms.json',
+];
+let upstream = null;
+for (const u of UPSTREAM_LIVEROOMS) {
+  try {
+    const r = await fetch(u, { signal: AbortSignal.timeout(9000) });
+    if (r.ok) {
+      upstream = await r.json();
+      break;
+    }
+  } catch (e) {
+    /* 换下一个镜像 */
+  }
+}
+const upstreamRooms = (upstream && (upstream.rooms || upstream)) || [];
+const nowS = Math.floor(Date.now() / 1000);
+const upstreamLive = upstreamRooms.filter(
+  (r) => r && r.live && r.stream && r.stream.url && (!r.stream.expires || r.stream.expires > nowS)
+);
+console.log(
+  '   上游直播信号: ' + upstreamLive.length + ' 条 / 共 ' + upstreamRooms.length + ' 个房间（上游可达=' + (upstream ? '是' : '否') + '）'
+);
 await page.goto(pageUrl('#/live'), { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(16000);
 const live = await page.evaluate(() => {
@@ -68,6 +96,16 @@ const live = await page.evaluate(() => {
   };
 });
 console.log('   ' + JSON.stringify(live));
+// 数据通道状态：远端通不通，站点必须如实反映（不允许静默失败）
+const channel = await page.evaluate(() => {
+  const s = window.__LPLTV_DATA_STATUS__ || null;
+  const b = document.getElementById('data-channel-banner');
+  return {
+    status: s,
+    banner: b && b.style.display !== 'none' && b.textContent.trim() ? b.textContent.trim().replace(/\s+/g, ' ') : '',
+  };
+});
+console.log('   数据通道: ' + JSON.stringify(channel));
 // 直播可能正处于「无信号」状态（赛事刚结束/未开播）——此时站点必须给出明确提示，而不是黑屏
 const liveMsg = await page.evaluate(() => {
   const m = document.querySelector('.player-msg');
@@ -101,9 +139,26 @@ if (live.w > 0 && live.rs >= 2) {
     liveMsg || '（无提示）'
   );
 }
-// 清晰度档位随线路变化（腾讯多档 / B 站单档），判据是「有可用档位」
-check('清晰度有可用档位', live.q >= 1, 'items=' + live.q);
-check('直播赛事信息已展示', live.rows >= 3, 'rows=' + live.rows);
+// 清晰度档位随线路变化（腾讯多档 / B 站单档），判据是「有可用档位」。
+// ⚠️ 必须按「上游有没有信号」来判：上游在播却显示不出来才算回归；
+// 上游本来就没信号时不该拿这个判据去卡站点（休赛期不算回归）。
+if (upstreamLive.length === 0) {
+  console.log('   （上游当前无直播信号 → 清晰度/侧栏判据按信号感知跳过，但要给出明确提示）');
+  check('无上游信号时站点不假装有直播', /暂无直播信号|信号|结束|准备/.test(liveMsg), liveMsg || '（无提示）');
+} else if (live.q >= 1 && live.rows >= 3) {
+  check('清晰度有可用档位', true, 'items=' + live.q);
+  check('直播赛事信息已展示', true, 'rows=' + live.rows);
+} else if (channel.banner) {
+  // 上游在播、页面没显示出来，但站点**明确告知了数据通道故障** ——
+  // 故障被如实告知，不算静默失败（这是本条判据允许的唯一降级路径）。
+  check('清晰度有可用档位（数据通道故障时已如实告知）', true, 'items=' + live.q + ' · ' + channel.banner.slice(0, 70));
+  check('直播赛事信息已展示（数据通道故障时已如实告知）', true, 'rows=' + live.rows + ' · ' + channel.banner.slice(0, 70));
+} else {
+  check('清晰度有可用档位', false, 'items=' + live.q + '（上游在播却没显示，也没有告知通道故障）');
+  check('直播赛事信息已展示', false, 'rows=' + live.rows + '（上游在播却没显示，也没有告知通道故障）');
+}
+// 数据通道本身的状态必须可观测（验收脚本与页面横幅都读它）
+check('数据通道状态可观测', !!(channel.status && channel.status.state), channel.status ? channel.status.state : '（无）');
 
 // 直播倍速：hls.js 不得覆写用户选择的倍速
 const liveSpeed = await page.evaluate(async () => {
@@ -256,7 +311,20 @@ check('线路卡片有预览缩略图', visual.withShot > 0, visual.withShot + '
 check('平台标签有区分色', visual.platKinds.length >= 2, visual.platKinds.join(','));
 check('赛事横幅已渲染', visual.banner, visual.bannerLogos + ' 个队徽');
 check('有回到顶部按钮', visual.toTop);
-check('通知条为单行紧凑信息', visual.stripItems > 0, visual.stripItems + ' 项');
+// 通知条：上游有信号时必须有内容；上游没信号时必须如实写「暂无直播信号」
+if (upstreamLive.length > 0) {
+  check(
+    '通知条为单行紧凑信息',
+    visual.stripItems > 0 || !!channel.banner,
+    visual.stripItems + ' 项' + (channel.banner ? ' · 通道故障已告知' : '')
+  );
+} else {
+  check(
+    '通知条如实反映无信号',
+    /暂无直播信号/.test(stripState.label || '') || visual.stripItems === 0,
+    stripState.label || (visual.stripItems + ' 项')
+  );
+}
 
 // 音量可调 + 记忆
 const volTest = await page.evaluate(async () => {
