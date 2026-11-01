@@ -81,7 +81,8 @@ on:
       - 'site/data/**'
 
 permissions:
-  contents: write
+  contents: write   # 提交数据
+  actions: write    # 链式续命要派发 workflow_dispatch
 
 concurrency:
   group: refresh-data
@@ -153,6 +154,49 @@ jobs:
               echo "已提交，站点下次轮询（约 5 分钟内）自动取到新数据"
             fi
           fi
+
+      # ============================================================
+      # 链式续命：让「每 20 分钟刷新一次」不再依赖 GitHub 自带 cron 准不准
+      # ============================================================
+      # 实测（2026-10-30 → 11-01，共 27 小时）：
+      #   GitHub 自带的 schedule **会跑，但极其稀疏** —— cron 写的是每 20 分钟
+      #   （11,31,51），实测只跑了 11 次，平均 3~7 小时才一轮，而且 11 次全部
+      #   success（不是配置错、不是被拒、不是平台故障）。
+      #   结果就是「每 20 分钟刷新」这个设计意图没兑现：
+      #   B 站流地址约 60 分钟过期，这一层经常拿到的已经是过期地址。
+      #
+      # 解法：工作流跑完**自己派生下一个自己**。
+      #   GITHUB_TOKEN 触发 workflow_dispatch 是官方允许的例外
+      #   （「GITHUB_TOKEN 触发的事件不会创建新 run」只针对 push 等事件，
+      #     workflow_dispatch / repository_dispatch 属于例外）。
+      #   每轮结束前 sleep 18 分钟再派生下一轮 → 稳定 ~20 分钟一轮。
+      #
+      # ⚠️ 护栏（别去掉，否则 CI 用量会翻倍）：
+      #   ① 派生前先看有没有别的 run 在跑/在排队 —— cron 也会触发本工作流，
+      #      有别人在跑就跳过派生，保证任何时刻只有一条链；
+      #   ② 上面的 cron 保留着当兜底：链断掉时 cron 能把链重新拉起来；
+      #   ③ 想彻底停掉续命：删掉下面这两个步骤即可（数据会退回到 cron 的稀疏节奏）。
+      - name: 等待下一个刷新窗口
+        if: always()
+        run: sleep 1080
+
+      - name: 派生下一轮（链式续命）
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKFLOW: refresh-data.yml
+        run: |
+          # ① 护栏：已有别的 run 在跑/在排队 → 说明 cron 也派生了一条，别叠第二条链
+          N=$(gh run list --workflow "$WORKFLOW" --limit 8 --json status \
+              --jq '[.[] | select(.status=="in_progress" or .status=="queued")] | length')
+          echo "在跑/排队的 run 数：$N（含本轮）"
+          if [ "$N" -gt 1 ]; then
+            echo "已有其它 run，跳过派生（避免两条链并行）"
+            exit 0
+          fi
+          # ② 派生下一轮
+          gh workflow run "$WORKFLOW" --ref "${GITHUB_REF_NAME}"
+          echo "已派生下一轮，约 20 分钟后继续"
 
       - name: 失败时保留日志
         if: failure()
