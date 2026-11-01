@@ -1412,7 +1412,12 @@
       const tick = () => {
         this._raf = requestAnimationFrame(tick);
         const v = this.video;
-        if (this.dm) {
+        // ⚠️ 必须判断 dmEnabled：这条循环是弹幕的**真正驱动源**，
+        // 它绕过了弹幕引擎自己的 play()/stop()（引擎内部那个 rAF 是多余的）。
+        // 以前这里无条件 step() → 点「关闭弹幕」只停了引擎的一半，
+        // 播放器的循环**照样每帧生成弹幕**：实测关闭后 2 秒又冒出 13 条，
+        // 而且它们会堆在画面上（用户反馈"弹幕关不掉"）。
+        if (this.dm && this.dmEnabled) {
           this.dm.setTime(v.currentTime);
           this.dm.step(16);
         }
@@ -1563,7 +1568,21 @@
       this.btnDm.classList.toggle('on', on);
       this.btnDm.classList.toggle('off', !on);
       this.dmLayer.style.display = on ? 'block' : 'none';
-      if (on && this.dm && this.dm.paused !== true && !this.video.paused) this.dm.play();
+      if (this.dm) {
+        if (on) {
+          // 重新开启时把游标对齐到当前播放位置 ——
+          // 否则关闭期间被跳过的那段时间的弹幕会在开启瞬间一次性涌出来。
+          const t = this.video.currentTime || 0;
+          this.dm.seek(t);
+          this.dm.setTime(t);
+          if (!this.video.paused) this.dm.play();
+        } else {
+          // 关掉时停掉引擎并清场：否则它还在后台跑，
+          // 关掉期间生成的一大批弹幕会在重新打开时挤成一团。
+          this.dm.stop();
+          this.dm.reset();
+        }
+      }
       if (this.opts.onDanmaku) this.opts.onDanmaku(on);
     }
 
@@ -1575,6 +1594,22 @@
       const m = this.menuDm;
       m.innerHTML = '';
       m.appendChild(el('div', { class: 'menu-title', text: '弹幕设置' }));
+      // ⭐ 总开关必须放在菜单最上面。
+      // 以前这个菜单里只有「不透明度 / 字号 / 速度 / 显示区域」和三类弹幕的筛选，
+      // **没有「关闭弹幕」** —— 想关只能按 D 键（手机上没有键盘 = 根本没法关），
+      // 用户反馈「没有关闭弹幕功能」就是这么来的。
+      const power = el('button', {
+        class: 'menu-item' + (this.dmEnabled ? '' : ' active'),
+        onclick: (e) => {
+          e.stopPropagation();
+          this.setDanmaku(!this.dmEnabled);
+          this.renderDmMenu();
+        },
+      });
+      power.appendChild(el('span', { class: 'tick', html: '' }));
+      power.appendChild(el('span', { text: this.dmEnabled ? '关闭弹幕' : '开启弹幕' }));
+      m.appendChild(power);
+      m.appendChild(el('div', { class: 'menu-sep' }));
       if (!this.dm) {
         m.appendChild(el('div', { class: 'menu-item', text: '该视频暂无 B 站弹幕数据' }));
         return;

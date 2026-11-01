@@ -50,7 +50,7 @@
       this.pool = [];
       this._raf = null;
       this._onChange = null;
-      this.stats = { calls: 0, denied: 0, noText: 0, full: 0, spawned: 0 };
+      this.stats = { calls: 0, denied: 0, noText: 0, full: 0, spawned: 0, skipped: 0 };
 
       this._ro = new ResizeObserver(() => this.layout());
       this._ro.observe(this.root);
@@ -77,14 +77,22 @@
     }
 
     reset() {
+      // ⚠️ 顺序：**先**把 DOM 上的弹幕摘掉，再清 active 数组。
+      //
+      // 原来的写法是「先 this.active.length = 0，再调 _releaseAll()」，
+      // 而 _releaseAll() 是**遍历 this.active** 来 removeChild 的 ——
+      // 数组已经被清空了，于是**旧的弹幕元素永远留在画面上**。
+      // 它们不在 active 里 → _recycle() 也不会再回收 → 就那样**冻结**在原地，
+      // 越积越多、互相重叠，还关不掉。
+      // 实测（2026-11-01，线上）：拖一次进度条后，画面上 90 个弹幕元素，
+      // 引擎只认 1 个，残留 89 个、重叠 973 对。
+      this._releaseAll();
       this.cursor = 0;
-      this.active.length = 0;
       // 注意：不能清空 tracks（轨道数由 layout() 决定），只重置占用状态
       for (let i = 0; i < this.tracks.length; i++) {
         this.tracks[i].right = -1e9;
         this.tracks[i].used = 0;
       }
-      this._releaseAll();
     }
 
     /** 跳转到某个时间（秒），只重置游标不重播已过弹幕 */
@@ -98,10 +106,37 @@
       }
       this.reset();
       this.cursor = lo;
+      // 同步时间戳：否则调用方紧接着的 setTime() 会把这次 seek 误判成「跳变」，
+      // 又白跑一遍 reset（画面被清两次）。
+      this.time = sec;
     }
 
+    /**
+     * 设置当前时间（秒）。
+     *
+     * ⚠️ 必须识别「跳变」：拖进度条 / 快进快退 / 换清晰度（视频重载后
+     * currentTime 归零再跳回原位）都会让时间突变。
+     * 若不处理，被跳过的那一大段弹幕会在**同一帧**全部生成 ——
+     * 它们都从屏幕右侧起步、互相重叠（实测一次拖进度条就堆出 90 条、重叠 973 对）。
+     *
+     * 跳变时走 seek()：只移动游标、**不补发**被跳过的那一段（真实播放器也是这么做的）。
+     *
+     * 判定不能只看「时间差 > 固定值」：3 倍速播放 + timeupdate 低频时，
+     * 正常播放也会出现 3 秒的时间差 → 会被误判成跳变 → 弹幕被跳过、画面被清空。
+     * 所以阈值要跟**墙钟流逝时间**挂钩：时间前进量超过「按流逝时间最多能前进的量」
+     * 才算跳变。
+     */
     setTime(sec) {
-      this.time = sec;
+      const t = Number(sec) || 0;
+      const now = performance.now();
+      const wall = this._lastWall != null ? (now - this._lastWall) / 1000 : 0;
+      this._lastWall = now;
+      const delta = t - this.time;
+      // 4 倍的墙钟余量（覆盖 3 倍速 + timeupdate 低频）+ 1.2 秒固定余量
+      if (this.items.length && this.time > 0 && delta > 1.2 + wall * 4) {
+        this.seek(t);
+      }
+      this.time = t;
     }
 
     play() {
@@ -186,12 +221,19 @@
 
     step(dt) {
       // 推进时间游标（外部通过 setTime 同步视频时间）
-      const before = this.cursor;
+      // 单帧生成上限：万一还有漏网的跳变（视频卡顿后恢复、异常 seek），
+      // 也不让几百条弹幕在同一帧全挤出来 —— 超出的直接跳过。
+      const MAX_PER_FRAME = 20;
+      let made = 0;
       while (this.cursor < this.items.length && this.items[this.cursor][0] <= this.time) {
+        const it = this.items[this.cursor];
         this.cursor++;
-      }
-      if (this.cursor !== before) {
-        for (let i = before; i < this.cursor; i++) this._spawn(this.items[i]);
+        if (made < MAX_PER_FRAME) {
+          this._spawn(it);
+          made++;
+        } else {
+          this.stats.skipped++;
+        }
       }
       this._move(dt);
       this._recycle();

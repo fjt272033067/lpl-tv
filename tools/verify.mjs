@@ -680,6 +680,81 @@ function check(name, pass, detail) {
       dm.items > 0,
       `items=${dm.items} loaded=${dm.loaded} @${dm.seekTo}s ${JSON.stringify(dm.sample)}`
     );
+
+    /* ---------------- 弹幕布局 / 关闭入口（2026-11-01 修的两个 bug） ----------------
+     * bug1：danmaku.js 的 reset() 先清 active 数组、再删 DOM（数组已空 → 什么都没删）
+     *        → 旧弹幕永远留在画面上，冻结、互相重叠、还关不掉。
+     *        实测线上：拖一次进度条 → 画面 90 个元素、引擎只认 1 个、残留 89、重叠 973 对。
+     * bug2：Player.startLoop() 无条件调 dm.step()，绕过了引擎的 stop()
+     *        → 「关闭弹幕」关不掉（关完 2 秒又冒出 13 条）。
+     */
+    const dmAfterSeek = await page.evaluate(async () => {
+      const v = document.querySelector('.player video');
+      const measure = () => {
+        const nodes = [...document.querySelectorAll('.dm-canvas .dm-item')];
+        const rects = nodes.map((n) => n.getBoundingClientRect());
+        let overlap = 0;
+        for (let i = 0; i < rects.length; i++) {
+          for (let j = i + 1; j < rects.length; j++) {
+            const a = rects[i];
+            const b = rects[j];
+            if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) overlap++;
+          }
+        }
+        const e = window.__dm;
+        return { dom: nodes.length, active: e ? e.active.length : -1, overlap };
+      };
+      // 拖进度条：这是最容易触发「残留 + 炸屏」的操作
+      const dur = v.duration || 600;
+      v.currentTime = Math.min(dur - 5, (v.currentTime || 0) + 120);
+      await new Promise((r) => setTimeout(r, 2500));
+      const after = measure();
+      const btn = document.querySelector('[data-ctl="danmaku"]');
+      const menuItems = [];
+      let closed = false;
+      let hidden = false;
+      let domAfter = -1;
+      let activeAfter = -1;
+      if (btn) {
+        btn.click();
+        const menu = document.querySelector('.menu[data-menu="dm"]');
+        const items = [...menu.querySelectorAll('.menu-item')];
+        menuItems.push(...items.map((x) => x.textContent.trim()));
+        const off = items.find((x) => /关闭弹幕/.test(x.textContent));
+        if (off) {
+          off.click();
+          closed = true;
+          await new Promise((r) => setTimeout(r, 2500));
+          const layer = document.querySelector('.dm-layer');
+          hidden = layer ? getComputedStyle(layer).display === 'none' : false;
+          domAfter = document.querySelectorAll('.dm-canvas .dm-item').length;
+          activeAfter = window.__dm ? window.__dm.active.length : -1;
+        }
+      }
+      // 恢复开启，别影响后面的用例
+      if (closed) {
+        document.querySelector('[data-ctl="danmaku"]').click();
+        const menu = document.querySelector('.menu[data-menu="dm"]');
+        const on = [...menu.querySelectorAll('.menu-item')].find((x) => /开启弹幕/.test(x.textContent));
+        if (on) on.click();
+        await new Promise((r) => setTimeout(r, 800));
+      }
+      return { after, menuItems, closed, hidden, domAfter, activeAfter };
+    });
+    console.log('   弹幕拖动后: ' + JSON.stringify(dmAfterSeek.after));
+    console.log('   弹幕菜单  : ' + JSON.stringify(dmAfterSeek.menuItems));
+    check(
+      '拖动进度条后弹幕无冻结残留（画面元素数 = 引擎在飞数）',
+      dmAfterSeek.after.dom === dmAfterSeek.after.active,
+      `dom=${dmAfterSeek.after.dom} active=${dmAfterSeek.after.active}`
+    );
+    check('拖动进度条后弹幕不叠字（无炸屏）', dmAfterSeek.after.overlap === 0, `overlap=${dmAfterSeek.after.overlap}`);
+    check('弹幕设置菜单里有「关闭弹幕」入口', dmAfterSeek.closed === true, JSON.stringify(dmAfterSeek.menuItems));
+    check(
+      '关闭弹幕后不再生成（画面与引擎都为空）',
+      dmAfterSeek.hidden === true && dmAfterSeek.domAfter === 0 && dmAfterSeek.activeAfter === 0,
+      `hidden=${dmAfterSeek.hidden} dom=${dmAfterSeek.domAfter} active=${dmAfterSeek.activeAfter}`
+    );
     await page.screenshot({ path: path.join(SHOTS, '05-watch-danmaku.png') });
 
     // 切清晰度
