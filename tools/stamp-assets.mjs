@@ -24,7 +24,7 @@ const SITE = path.join(ROOT, 'site');
 const INDEX = path.join(SITE, 'index.html');
 
 // 只有会变的资源参与哈希；vendor 下的库是固定的，不参与（免得无谓地让它们换 URL）
-const STAMPED = ['assets/app.js', 'assets/style.css', 'assets/danmaku.js'];
+const STAMPED = ['assets/app.js', 'assets/style.css', 'assets/danmaku.js', 'assets/abuse-words.js'];
 
 const h = crypto.createHash('sha1');
 for (const rel of STAMPED) {

@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { fetchLiveRoom } from './bili-live.mjs';
 import { BILI_ROOM_IDS, EXTERNAL_ROOMS } from './live-rooms.mjs';
 import { sanitizeText } from './sanitize-danmaku.mjs';
+import { hasAbuse } from './abuse-words.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -838,16 +839,23 @@ async function main() {
       await sleep(600);
       continue;
     }
+    // 落盘前做两道处理：
+    // ① 脱敏：弹幕是第三方用户评论，偶尔混进真实的手机号/邮箱/卡号。
+    //    站点会公开播放这些弹幕，仓库更是公开可批量下载，所以先打码。
+    // ② 合规：命中粗俗/谩骂词的弹幕**整条不落盘**（词表见 site/assets/abuse-words.js，
+    //    与运行时的屏蔽词表同源）。实测抽样 8.8 万条里约 1.7% 命中。
+    const cleanItems = items.filter((it) => {
+      if (!Array.isArray(it)) return true;
+      return !hasAbuse(String(it[it.length - 1] ?? ''));
+    });
     const payload = {
       cid,
       bvid: m.bvid,
       page: page.page,
       part: page.part || '',
       title: m.biliTitle,
-      count: items.length,
-      // 落盘前脱敏：弹幕是第三方用户评论，偶尔混进真实的手机号/邮箱/卡号。
-      // 站点会公开播放这些弹幕，仓库更是公开可批量下载，所以先打码。
-      items: items.map((it) => {
+      count: cleanItems.length,
+      items: cleanItems.map((it) => {
         if (!Array.isArray(it)) return it;
         const last = it.length - 1;
         const s = sanitizeText(String(it[last] ?? ''));
@@ -858,7 +866,7 @@ async function main() {
       }),
     };
     fs.writeFileSync(outFile, JSON.stringify(payload));
-    m.dmCount = items.length;
+    m.dmCount = cleanItems.length;
     dmOk++;
     if ((i + 1) % 10 === 0) {
       const files = fs.readdirSync(DM_DIR);

@@ -44,17 +44,17 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300b3ff'/%3E%3Cpath d='M14 20h36v24H14z' fill='none' stroke='%23fff' stroke-width='4'/%3E%3Cpath d='M26 28l14 8-14 8z' fill='%23fff'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="assets/style.css?v=e07fde10c6" />
+    <link rel="stylesheet" href="assets/style.css?v=c78271d66b" />
   </head>
   <body>
     <a class="skip" href="#view">跳到主要内容</a>
 
-    <div id="wx-tip" class="wx-tip" hidden>
-      <span>
-        当前在<b>微信内置浏览器</b>中打开，直播与弹幕可能受限制。建议点右上角 <b>···</b> →「<b>在浏览器打开</b>」。
-      </span>
-      <button class="wx-close" id="wx-close" aria-label="关闭提示">×</button>
-    </div>
+    <!--
+      微信内置浏览器专属提示条已移除（2026-11-02）：
+      主动引导用户「在浏览器打开」属于《微信外部链接内容管理规范》19.3 条
+      （限制页面浏览渠道 / 微信内展示与其它浏览器不一致）。
+      现在微信内与其它浏览器的页面表现完全一致。
+    -->
 
     <header class="topbar">
       <div class="topbar-inner">
@@ -113,12 +113,17 @@
         <p class="foot-dim">
           非腾讯官方站点 · 所有视频版权归原权利人所有 · 本站不存储、不转存任何视频文件，仅做播放器与界面层
         </p>
+        <p class="foot-dim">
+          内容合规：弹幕为第三方公开评论的转载，已在展示前做敏感词过滤与个人信息脱敏；
+          站点不提供任何下载、诱导分享、用户数据采集或付费内容。
+        </p>
       </div>
     </footer>
 
     <script src="assets/vendor/hls.min.js"></script>
     <script src="assets/vendor/flv.min.js"></script>
-    <script src="assets/danmaku.js?v=e07fde10c6"></script>
-    <script src="assets/app.js?v=e07fde10c6"></script>
+    <script src="assets/abuse-words.js?v=c78271d66b"></script>
+    <script src="assets/danmaku.js?v=c78271d66b"></script>
+    <script src="assets/app.js?v=c78271d66b"></script>
   </body>
 </html>

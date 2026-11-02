@@ -755,6 +755,54 @@ function check(name, pass, detail) {
       dmAfterSeek.hidden === true && dmAfterSeek.domAfter === 0 && dmAfterSeek.activeAfter === 0,
       `hidden=${dmAfterSeek.hidden} dom=${dmAfterSeek.domAfter} active=${dmAfterSeek.activeAfter}`
     );
+
+    /* ---------------- 内容合规（2026-11-02，微信外链申诉驳回后整改） ----------------
+     * 驳回理由：「内容仍然违反《微信外部链接内容管理规范》」。
+     * 对照规范里最容易命中的两条做了整改，并各自加断言：
+     *   10.2 低俗/恶意谩骂 → 弹幕命中粗俗谩骂词整条不显示
+     *   19.3 限制页面浏览渠道 → 移除微信专属提示条、去掉「在浏览器打开」引导
+     */
+    const dmSafe = await page.evaluate(async () => {
+      const list = Array.isArray(window.__LPLTV_ABUSE_WORDS) ? window.__LPLTV_ABUSE_WORDS : [];
+      const e = window.__dm;
+      let rendered = null;
+      let renderedKeep = null;
+      if (e) {
+        // 注入一条带谩骂词的弹幕，看它会不会真的被渲染出来
+        e.push([0, 1, 16777215, 25, '这条弹幕含傻逼合规探针']);
+        await new Promise((r) => setTimeout(r, 1500));
+        rendered = [...document.querySelectorAll('.dm-canvas .dm-item')].some((n) =>
+          n.textContent.includes('傻逼')
+        );
+        // 反向探针：ASCII 短词按**词边界**匹配，
+        // 不该误伤人名 letme / 队名 TMWBG（弹幕里提到选手是正常的）
+        e.push([0, 1, 16777215, 25, 'letme 这把carry合规探针']);
+        await new Promise((r) => setTimeout(r, 1500));
+        renderedKeep = [...document.querySelectorAll('.dm-canvas .dm-item')].some((n) =>
+          n.textContent.includes('letme')
+        );
+      }
+      const bodyText = document.body.innerText || '';
+      return {
+        words: list.length,
+        rendered,
+        renderedKeep,
+        wxTip: !!document.querySelector('#wx-tip'),
+        jumpPrompt: /在浏览器打开|改用浏览器|点右上角/.test(bodyText),
+        footCompliance: /内容合规|敏感词过滤/.test(bodyText),
+      };
+    });
+    console.log('   合规检查: ' + JSON.stringify(dmSafe));
+    check('弹幕屏蔽词表已加载（非空）', dmSafe.words > 0, 'words=' + dmSafe.words);
+    check('含谩骂词的弹幕不会被渲染', dmSafe.rendered === false, 'rendered=' + dmSafe.rendered);
+    check(
+      '屏蔽词按词边界匹配（不误伤 letme 等人名）',
+      dmSafe.renderedKeep === true,
+      'renderedKeep=' + dmSafe.renderedKeep
+    );
+    check('页面没有微信专属提示条（19.3）', dmSafe.wxTip === false, 'wx-tip=' + dmSafe.wxTip);
+    check('页面文案无「在浏览器打开」类引导跳出微信的话（19.3）', dmSafe.jumpPrompt === false, '命中=' + dmSafe.jumpPrompt);
+    check('页脚有内容合规声明', dmSafe.footCompliance === true, 'foot=' + dmSafe.footCompliance);
     await page.screenshot({ path: path.join(SHOTS, '05-watch-danmaku.png') });
 
     // 切清晰度
@@ -853,7 +901,33 @@ function check(name, pass, detail) {
   });
   console.log('   今天起的赛程: ' + JSON.stringify(soon));
   check('赛程页有「今天起的赛程」速览', soon.n > 0, soon.n + ' 行 ' + JSON.stringify(soon.sample));
-  check('速览里的场次可直接点录播', soon.play > 0, 'play=' + soon.play);
+
+  // 「速览里的场次可直接点录播」：**只有已经有录像的场次才有录播按钮**。
+  // 赛程滚到空档期时（今天起全是还没开打的比赛），本来就没有录像 → 不能判失败。
+  // 所以这里拿**数据里「有 id / bvid 的场次数」**当期望值，断言「渲染与数据一致」。
+  const soonExpect = await page.evaluate(() => {
+    const list = (window.__LPLTV_SCHED_LIST || []).filter(
+      (m) => m.date && m.teamA && m.teamB && !/^D\d/i.test(m.teamA)
+    );
+    const d = new Date();
+    const todayStr =
+      d.getFullYear() +
+      '-' +
+      String(d.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(d.getDate()).padStart(2, '0');
+    const soon = list
+      .filter((m) => String(m.date).slice(0, 10) >= todayStr)
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+      .slice(0, 10);
+    // 直播中的场次渲染的是「直播中」标记、没有录播按钮 → 不计入期望
+    return soon.filter((m) => !m.live && (m.id || m.bvid)).length;
+  });
+  check(
+    '速览里的场次可直接点录播（与数据一致）',
+    soon.play === soonExpect,
+    `play=${soon.play} 期望=${soonExpect}`
+  );
 
   /* ---------------- 远端自动重绘的竞态回归 ---------------- */
   // 背景：远端数据到位会触发「自动重绘」。如果本地快照还在加载中，旧渲染晚到就会

@@ -54,6 +54,7 @@
 
       this._ro = new ResizeObserver(() => this.layout());
       this._ro.observe(this.root);
+      this._compileBlockWords();
       this.layout();
     }
 
@@ -162,6 +163,7 @@
     setOption(key, value) {
       this.opts[key] = value;
       if (key === 'fontSize' || key === 'opacity' || key === 'area') this.layout();
+      if (key === 'blockWords') this._compileBlockWords();
     }
 
     layout() {
@@ -204,6 +206,39 @@
       return n;
     }
 
+    /**
+     * 编译屏蔽词：纯 ASCII 的短词（tm / nm / sb 之类）要求**两侧不是字母**，
+     * 否则会误伤人名与队名缩写 —— 例如 "letme"（LPL 选手）里含 "tm"、
+     * "TMWBG" 队名里也含 "TM"。非 ASCII 词（傻逼、卧槽…）按子串匹配即可。
+     */
+    _compileBlockWords() {
+      const list = (this.opts.blockWords || []).filter(Boolean);
+      this._blockExact = [];
+      this._blockRe = [];
+      for (const w of list) {
+        const n = String(w).toLowerCase();
+        if (/^[a-z]{2,4}$/.test(n)) {
+          this._blockRe.push(new RegExp('(?<![a-z0-9])' + n + '(?![a-z0-9])', 'g'));
+        } else {
+          this._blockExact.push(n);
+        }
+      }
+    }
+
+    /** 这条文本是否命中屏蔽词 */
+    _blocked(text) {
+      if (!text) return false;
+      const t = String(text).toLowerCase();
+      for (const n of this._blockExact) {
+        if (t.indexOf(n) !== -1) return true;
+      }
+      for (const re of this._blockRe) {
+        re.lastIndex = 0;
+        if (re.test(t)) return true;
+      }
+      return false;
+    }
+
     _allowed(mode, text) {
       const o = this.opts;
       if (mode === MODE.TOP && !o.showTop) return false;
@@ -211,11 +246,7 @@
       if (mode === MODE.CODE && !o.showCode) return false;
       if (mode === MODE.SPECIAL && !o.showScroll) return false;
       if (mode !== MODE.TOP && mode !== MODE.BOTTOM && !o.showScroll) return false;
-      if (o.blockWords && o.blockWords.length) {
-        for (const w of o.blockWords) {
-          if (w && text && text.indexOf(w) !== -1) return false;
-        }
-      }
+      if (this._blocked(text)) return false;
       return true;
     }
 

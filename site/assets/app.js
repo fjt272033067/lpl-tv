@@ -21,6 +21,18 @@
     true
   );
 
+  /**
+   * 弹幕屏蔽词：命中整条**不显示**。
+   *
+   * 为什么需要：弹幕是 B 站用户评论的原文转载，其中确实混有粗俗谩骂
+   * （实测抽样 8.8 万条里约 1.7% 命中）。站点把整段文字直接显示出来，
+   * 在任何内容合规审核里都可能被判成「低俗/恶意谩骂」。
+   *
+   * ⚠️ 词表来自 `site/assets/abuse-words.js`（浏览器与烘焙流水线共用同一份，
+   *    Node 侧由 tools/abuse-words.mjs 读取 → 两边不会不同步）。
+   */
+  const ABUSE_WORDS = Array.isArray(window.__LPLTV_ABUSE_WORDS) ? window.__LPLTV_ABUSE_WORDS : [];
+
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
     if (attrs) {
@@ -1727,8 +1739,11 @@
         v.src = url;
         v.play().catch(() => {});
       } else {
-        // 老内核（如部分微信 X5 版本）既不支持 hls.js 也没有原生 HLS
-        this.showMsg('当前浏览器不支持 HLS 直播播放，请改用浏览器打开或观看录像', true);
+        // 老内核（如部分微信 X5 版本）既不支持 hls.js 也没有原生 HLS。
+        // ⚠️ 文案里**不要**出现「请改用浏览器打开」之类的引导跳出微信的话 ——
+        // 那是《微信外部链接内容管理规范》19.3 条最典型的形态。
+        // 只陈述能力边界 + 给出站内可用的替代路径。
+        this.showMsg('当前浏览器不支持直播流播放，可观看录像或切换其它线路', true);
       }
     }
 
@@ -3571,7 +3586,8 @@
     p.tags.appendChild(tags);
 
     // 弹幕引擎
-    const dm = new DanmakuEngine(p.dmLayer, {});
+    // blockWords：带谩骂/粗俗词的弹幕**整条不显示**（内容合规，见 ABUSE_WORDS 注释）
+    const dm = new DanmakuEngine(p.dmLayer, { blockWords: ABUSE_WORDS });
     p.mountDanmaku(dm);
     p.renderDmMenu();
 
@@ -3782,6 +3798,9 @@
     await ensureTeamLogos();
     if (isStaleRender(seq)) return;
     const now = Date.now();
+    // 调试钩子：让验收脚本能拿到「今天起的赛程」原始数据，
+    // 从而判断「速览里该有录播按钮的场次」到底有几场（赛程空档期会是 0）。
+    window.__LPLTV_SCHED_LIST = list;
 
     // 实时覆盖：正在进行的比赛用腾讯实时数据刷新比分（跨域可读，零构建期依赖）
     let liveOverlaid = 0;
@@ -4297,25 +4316,13 @@
     nav.style.display = nav.style.display === 'flex' ? 'none' : 'flex';
   });
 
-  // 微信内置浏览器提示（微信会限制第三方页面能力，提示用户用系统浏览器）
-  (function wxTip() {
-    const ua = navigator.userAgent || '';
-    if (!/MicroMessenger/i.test(ua)) return;
-    const tip = $('#wx-tip');
-    if (tip) tip.hidden = false;
-    const close = $('#wx-close');
-    if (close) {
-      close.addEventListener('click', () => {
-        tip.hidden = true;
-        try {
-          sessionStorage.setItem('lpltv_wx_tip', '1');
-        } catch (e) {}
-      });
-    }
-    try {
-      if (sessionStorage.getItem('lpltv_wx_tip') === '1' && tip) tip.hidden = true;
-    } catch (e) {}
-  })();
+  // ⚠️ 微信内置浏览器提示条已**移除**（2026-11-02）。
+  // 原因：微信《微信外部链接内容管理规范》第 19.3 条把
+  // 「无正当理由，通过技术手段限制页面浏览渠道，导致微信展示效果和其他浏览器
+  //   展示效果实质性不一致」列为违规（典型形态就是主动弹条引导用户
+  //   「点右上角 ··· 在浏览器打开」）。
+  // 移除后，微信内与其它浏览器的页面表现完全一致，
+  // 播放能力差异改为**就地提示**（见 playHlsUrl 的降级文案），不再全局引导跳出。
 
   // 首屏
   route();
