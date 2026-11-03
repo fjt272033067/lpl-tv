@@ -497,6 +497,28 @@
     catalog: 24 * 60 * 60 * 1000,
   };
   const DEFAULT_MAX_AGE = 6 * 60 * 60 * 1000;
+
+  /**
+   * 判「这份远端数据太旧了」时，**看哪个时间戳** —— 取决于这份数据本身的性质：
+   *
+   *   'content'  = 文件内容最后变化的时间（`version.json.files[name]`）
+   *   'verified' = 上次从上游核对的时间（`version.json.updatedAt`）
+   *
+   * · liverooms → **content**：内容就是一批带签名的 B 站流地址，60 分钟就失效。
+   *   哪怕 CI 刚核对过，这份内容里的地址也已经死了 → 必须按内容时间戳判龄。
+   *
+   * · schedule / catalog → **verified**：内容（对阵、比分、录像目录）**可以长期不变**
+   *   —— 没有新比赛、比分也没更新时，内容时间戳天然不动，但 CI 每 20 分钟都在
+   *   核对上游、确认内容没变 → 这份数据是准的，只是"没变"。
+   *   实测 2026-11-03：早先统一按内容时间戳判龄，赛程内容超过 24 小时后
+   *   整份远端被判"太旧"而**被丢弃**（连核对时间也一起丢）→
+   *   页面显示部署时那份旧快照 +「赛程快照已滞后 72 小时」，而远端其实一直是准的。
+   */
+  const DATA_AGE_BY = {
+    liverooms: 'content',
+    schedule: 'verified',
+    catalog: 'verified',
+  };
   /**
    * 探不通的基址：按**失败次数**递进退避，而不是一刀切记死 30 分钟。
    *
@@ -636,17 +658,25 @@
   }
 
   /**
-   * 给某份数据挑一个远端源：**内容最新** 且 **不太旧**（按文件的陈旧上限）。
+   * 给某份数据挑一个远端源：**内容比本地新** 且 **这份数据不算太旧**。
    * 返回 {base, stamp} 或 null。
+   *
+   * ⚠️ 判龄用哪个时间戳，见 DATA_AGE_BY 的注释：
+   *   liverooms 看**内容**时间戳（流地址会过期），
+   *   schedule / catalog 看**上次核对上游**的时间（内容可以长期不变）。
    */
   function pickRemoteSource(name, localStamp) {
     const maxAge = DATA_MAX_AGE[name] || DEFAULT_MAX_AGE;
+    const byContent = (DATA_AGE_BY[name] || 'verified') === 'content';
     const now = Date.now();
     return (
       remoteVerList
         .map((e) => ({ base: e.base, stamp: (e.files && e.files[name]) || '', updatedAt: e.updatedAt || '' }))
         .filter((e) => e.stamp && Date.parse(e.stamp) > Date.parse(localStamp || 0))
-        .filter((e) => now - Date.parse(e.stamp) <= maxAge)
+        .filter((e) => {
+          const t = Date.parse(byContent ? e.stamp : e.updatedAt || e.stamp);
+          return isFinite(t) && now - t <= maxAge;
+        })
         .sort((a, b) => Date.parse(b.stamp) - Date.parse(a.stamp))[0] || null
     );
   }
@@ -756,8 +786,26 @@
     }
     const localStamp = (localVer && localVer.files && localVer.files[name]) || '';
     const src = pickRemoteSource(name, localStamp);
-    // 「刷新时间」= 本地/远端版本信息里较新的那份（内容没变时它照样是新的）
-    const ver = pickNewer(localVer, src ? { updatedAt: src.updatedAt } : null);
+
+    // 「上次核对上游的时间」= 本地与远端 version.json 里较新的那个。
+    //
+    // ⚠️ 即使**内容**没换远端（内容本来就没变，远端不比本地新），
+    //    也要采用远端的 updatedAt —— 否则页面会拿**部署时那份旧快照**的
+    //    updatedAt 去显示「赛程快照已滞后 72 小时」，
+    //    而实际上远端每 20 分钟都在核对上游（只是内容没变）。
+    //    实测 2026-11-03 就是这么被误报的。
+    //
+    // 但要防一种情况：镜像的 version.json 新、内容旧（CDN 缓存不同步），
+    // 这种不能采信它的 updatedAt → 加一道「远端内容不比本地旧」的门槛。
+    const bestRemote = bestRemoteEntry();
+    const remoteStamp = bestRemote && bestRemote.files ? bestRemote.files[name] || '' : '';
+    const remoteTrustworthy =
+      !!bestRemote &&
+      (!localStamp || !remoteStamp || Date.parse(remoteStamp) >= Date.parse(localStamp));
+    const ver = pickNewer(
+      localVer,
+      remoteTrustworthy ? { updatedAt: bestRemote.updatedAt || '', files: bestRemote.files || {} } : null
+    );
 
     if (src) {
       // 远端内容更新 → 取远端（内容时间戳拼进 URL 当缓存键：内容没变就命中缓存）
@@ -3994,8 +4042,16 @@
     let tbdIdx = 0;
     list.forEach((m) => {
       const hasTeams = !!(m.teamA && m.teamB && !/^D\d/i.test(m.teamA));
+      // ⚠️ key 必须**包含轮次（phase）**。
+      //
+      // 早先的 key 只有「赛事 + 队伍组合」，于是**同一对队伍在小组赛和淘汰赛的
+      // 两场会被合并成一条系列赛**，Map 只保留先出现的那条（小组赛）→
+      // 淘汰赛那一行直接消失。
+      // 实测 2026-11-03：2026 全球总决赛的「晋级」列只显示了 3 场（应为 4 场），
+      // 缺的就是 GEN vs LYON —— 因为它在第三天（小组赛）已经出现过一次。
+      // 同类受影响：KC-MVK、FUR-MVK、2025 的 G2-TES。
       const key = hasTeams
-        ? m.game + '|' + [m.teamA, m.teamB].sort().join('-')
+        ? m.game + '|' + (m.phase || '') + '|' + [m.teamA, m.teamB].sort().join('-')
         : m.game + '|' + (m.phase || '') + '|TBD' + tbdIdx++;
       if (!seriesMap.has(key)) {
         seriesMap.set(key, {

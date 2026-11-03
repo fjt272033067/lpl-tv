@@ -473,6 +473,39 @@ check('对阵行带队伍徽标', sch.logos > 0, 'logos=' + sch.logos);
 check('对阵行带比分', sch.scores > 0, 'scores=' + sch.scores);
 check('赛程有赛事下拉选择', sch.picker);
 
+// 对阵图：同一对队伍在不同轮次必须各占一行（早先 key 不含轮次 → 淘汰赛那行被吞）
+const bracketProbe = await page.evaluate(() => {
+  const ROUND_NAME = {
+    第一天: '第1轮', 第二天: '第2轮', 第三天: '第3轮', 第四天: '第4轮',
+    第五天: '第5轮', 第六天: '第6轮', 第七天: '第7轮', 第八天: '第8轮',
+    四分之一决赛: '晋级', 半决赛: '半决赛', 决赛: '决赛',
+  };
+  const list = window.__LPLTV_SCHED_LIST || [];
+  const evTitle = (document.querySelector('.bracket-event-title span') || {}).textContent || '';
+  const byRound = new Map();
+  for (const m of list) {
+    if (m.game !== evTitle) continue;
+    if (!m.teamA || !m.teamB || /^D\d/i.test(m.teamA)) continue;
+    const r = ROUND_NAME[m.phase] || '第1轮';
+    if (!byRound.has(r)) byRound.set(r, new Set());
+    byRound.get(r).add((m.phase || '') + '|' + [m.teamA, m.teamB].sort().join('-'));
+  }
+  const cols = [...document.querySelectorAll('.bracket-col')].map((c) => ({
+    round: (c.querySelector('.round-name') || {}).textContent || '',
+    rows: c.querySelectorAll('.bracket-row').length,
+  }));
+  const bad = cols
+    .filter((c) => byRound.has(c.round) && byRound.get(c.round).size !== c.rows)
+    .map((c) => c.round + ' 渲染' + c.rows + ' 应为' + byRound.get(c.round).size);
+  return { evTitle, cols: cols.length, bad };
+});
+console.log('   对阵图轮次完整性: ' + JSON.stringify(bracketProbe));
+check(
+  '对阵图每个轮次的行数与数据一致（同队伍不同轮次不合并）',
+  bracketProbe.bad.length === 0,
+  bracketProbe.bad.length ? bracketProbe.bad.join('; ') : '全部一致'
+);
+
 // 赛程新鲜度：快照时间 + 滞后时长 + 当前赛事信息（运行时直连）
 const schFresh = await page.evaluate(() => ({
   label: (document.querySelector('.updated-at') || {}).textContent || '',

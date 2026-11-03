@@ -847,6 +847,47 @@ function check(name, pass, detail) {
   check('对阵行带队伍徽标', sch.logos > 0, 'logos=' + sch.logos);
   check('对阵行带比分', sch.scores > 0, 'scores=' + sch.scores);
   check('赛程有赛事下拉选择', sch.picker);
+
+  /* ---- 对阵图：同一对队伍在不同轮次必须各占一行 ----
+   * 早先系列赛的 key 只有「赛事 + 队伍组合」，不含轮次 →
+   * 同一对队伍在小组赛和淘汰赛的两场被合并成一条，Map 只留先出现的那条（小组赛），
+   * **淘汰赛那一行直接消失**。
+   * 实测 2026-11-03：2026 全球总决赛「晋级」列只显示 3 场（应为 4 场），
+   * 缺的正是 GEN vs LYON —— 它在第三天（小组赛）已经出现过一次。
+   * 同类受影响：KC-MVK、FUR-MVK、2025 的 G2-TES。
+   */
+  const bracketProbe = await page.evaluate(() => {
+    const ROUND_NAME = {
+      第一天: '第1轮', 第二天: '第2轮', 第三天: '第3轮', 第四天: '第4轮',
+      第五天: '第5轮', 第六天: '第6轮', 第七天: '第7轮', 第八天: '第8轮',
+      四分之一决赛: '晋级', 半决赛: '半决赛', 决赛: '决赛',
+    };
+    const list = window.__LPLTV_SCHED_LIST || [];
+    const evTitle = (document.querySelector('.bracket-event-title span') || {}).textContent || '';
+    // 按「轮次 + 队伍组合」统计每个轮次应有几行（与页面渲染口径一致）
+    const byRound = new Map();
+    for (const m of list) {
+      if (m.game !== evTitle) continue;
+      if (!m.teamA || !m.teamB || /^D\d/i.test(m.teamA)) continue;
+      const r = ROUND_NAME[m.phase] || '第1轮';
+      if (!byRound.has(r)) byRound.set(r, new Set());
+      byRound.get(r).add((m.phase || '') + '|' + [m.teamA, m.teamB].sort().join('-'));
+    }
+    const cols = [...document.querySelectorAll('.bracket-col')].map((c) => ({
+      round: (c.querySelector('.round-name') || {}).textContent || '',
+      rows: c.querySelectorAll('.bracket-row').length,
+    }));
+    const bad = cols
+      .filter((c) => byRound.has(c.round) && byRound.get(c.round).size !== c.rows)
+      .map((c) => c.round + ' 渲染' + c.rows + ' 应为' + byRound.get(c.round).size);
+    return { evTitle, cols: cols.length, bad };
+  });
+  console.log('   对阵图轮次完整性: ' + JSON.stringify(bracketProbe));
+  check(
+    '对阵图每个轮次的行数与数据一致（同队伍不同轮次不合并）',
+    bracketProbe.bad.length === 0,
+    bracketProbe.bad.length ? bracketProbe.bad.join('; ') : '全部一致'
+  );
   const schFresh = await page.evaluate(() => ({
     label: (document.querySelector('.updated-at') || {}).textContent || '',
     eventMeta: (document.querySelector('.sched-event-meta') || {}).textContent || '',
@@ -860,11 +901,31 @@ function check(name, pass, detail) {
   // 新鲜快照绝不能被自己的「未来赛程」判成陈旧：快照里一定还有 0:0 的未开打场次
   // （含「总决赛」「D8G1」这类未定对阵的占位行），若把它们算成「漏赛果」，
   // 页面会对着刚烘焙的快照报滞后 —— 这条判据就是防那个方向写反的 bug。
-  check(
-    '新鲜快照不被误判为陈旧（未来 0:0 场次不计入漏赛果）',
-    !schFresh.staleBanner && !schFresh.staleTag && schFresh.unconfirmed === 0,
-    'banner=' + schFresh.staleBanner + ' tag=' + schFresh.staleTag + ' unconfirmed=' + schFresh.unconfirmed
-  );
+  //
+  // ⚠️ 这条判据依赖**本地快照本身是新鲜的**（<24 小时）。
+  // 本地 site/data 是 CI 推到仓库里的那份，本机不一定是最新的 ——
+  // 快照真超过 24 小时时，「已开打却无比分」的场次确实存在，横幅**应该**出现。
+  // 所以按快照实际年龄分两种情况断言（下面另有一条不依赖数据年龄的确定性判据）。
+  const localVerAgeH = await page.evaluate(() => {
+    const v = window.__LPLTV_SCHED_LIST && window.__LPLTV_DATA_STATUS__
+      ? window.__LPLTV_DATA_STATUS__.updatedAt
+      : '';
+    if (!v) return NaN;
+    return (Date.now() - Date.parse(v)) / 3600000;
+  });
+  if (isFinite(localVerAgeH) && localVerAgeH > 24) {
+    check(
+      '本地快照确实超过 24 小时（此时陈旧提示应当出现）',
+      schFresh.staleBanner === true,
+      '快照年龄=' + Math.round(localVerAgeH) + 'h banner=' + schFresh.staleBanner
+    );
+  } else {
+    check(
+      '新鲜快照不被误判为陈旧（未来 0:0 场次不计入漏赛果）',
+      !schFresh.staleBanner && !schFresh.staleTag && schFresh.unconfirmed === 0,
+      'banner=' + schFresh.staleBanner + ' tag=' + schFresh.staleTag + ' unconfirmed=' + schFresh.unconfirmed
+    );
+  }
 
   // 新鲜度必须按 version.json 的「上次核对上游的时间」判定。
   // 内容没变时 schedule.json 的 updatedAt 不会动（否则仓库每轮都产生新的大 blob），
@@ -1181,6 +1242,65 @@ function check(name, pass, detail) {
   check('陈旧提示给出官方对阵图出口', /lpl\.qq\.com/.test(stale.link), stale.link);
   await stalePage.close();
 
+  /* ---------------- 「未来 0:0 不算漏赛果」的确定性判据 ----------------
+   * 上面那条判据依赖本地快照够新鲜，而本地 site/data 是 CI 推到仓库里的那份，
+   * 本机不一定是最新的（快照超过 24 小时时横幅**本来就该**出现）。
+   *
+   * 这里造一个**不依赖数据年龄**的场景：
+   *   ① version.json 换成新鲜的（= 刚核对过上游）；
+   *   ② schedule.json 只保留**未来**的场次（把已开打的都剔掉）→ 不该有任何「漏赛果」；
+   * 期望：页面**不**报「已滞后」，未来的 0:0 对阵也不被标成「待确认」。
+   */
+  const freshSnapPage = await ctx.newPage();
+  await freshSnapPage.route(
+    (url) => url.hostname === '127.0.0.1' && url.pathname.endsWith('/data/schedule.json'),
+    async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      const nowMs = Date.now();
+      body.matches = (body.matches || []).filter((m) => {
+        const t = new Date(String(m.date || '').replace(/-/g, '/')).getTime();
+        return isFinite(t) && t > nowMs;
+      });
+      body.total = body.matches.length;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify(body),
+      });
+    }
+  );
+  await freshSnapPage.route(
+    (url) => url.hostname === '127.0.0.1' && url.pathname.endsWith('/data/version.json'),
+    async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      const now = new Date().toISOString();
+      body.updatedAt = now;
+      if (body.files) body.files = { schedule: now, catalog: now, liverooms: now };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify(body),
+      });
+    }
+  );
+  await freshSnapPage.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
+  await freshSnapPage.waitForTimeout(5000);
+  const freshSnap = await freshSnapPage.evaluate(() => ({
+    banner: !!document.querySelector('.sched-stale'),
+    bannerText: (document.querySelector('.sched-stale') || {}).textContent || '',
+    unconfirmed: document.querySelectorAll('.bracket-row.unconfirmed').length,
+    label: (document.querySelector('.updated-at') || {}).textContent || '',
+  }));
+  console.log('   只留未来场次 + 新鲜版本: ' + JSON.stringify(freshSnap));
+  check(
+    '未来 0:0 对阵不算「漏赛果」（不误报已滞后）',
+    !freshSnap.banner && freshSnap.unconfirmed === 0,
+    'banner=' + freshSnap.banner + ' unconfirmed=' + freshSnap.unconfirmed
+  );
+  await freshSnapPage.close();
+
   /* ---------------- 远端数据源（赛程自动更新的通道） ---------------- */
   // 站点把「本地烘焙快照」与「远端数据源」两份都读回来，按 updatedAt 取更新的那份。
   // 这条链路是「赛程像录像一样自动更新」的实现基础：CI 只需更新 JSON 文件，
@@ -1281,6 +1401,67 @@ function check(name, pass, detail) {
   );
   check('远端赛程内容真正生效（不只是标签变了）', /RA/.test(remoteState.text), remoteState.text.slice(0, 90));
   await remotePage.close();
+
+  /* ---- 场景 B：本地快照很旧、远端刚核对过 → 不该误报「已滞后」 ----
+   * 复现用户报的那个场景（2026-11-03）：
+   *   本地（部署时）那份快照已经 72 小时没更新，
+   *   而 CI 每 20 分钟都在核对上游（远端 version.json 的 updatedAt 一直是新的）。
+   *   早先的判龄用「内容最后变化时间」→ 赛程内容一天没变 → 超过 24 小时上限后
+   *   整份远端被判"太旧"而**被丢弃**（连核对时间也一起丢）→
+   *   页面显示本地那份的 72 小时 + 「赛程快照已滞后」。
+   *
+   * 期望：本地快照做成 72 小时旧、远端做成刚核对过 → 页面显示**远端那个新时间**，
+   * 且不弹「已滞后」横幅。
+   */
+  const oldLocalIso = new Date(Date.now() - 72 * 3600 * 1000).toISOString();
+  const freshRemoteIso = new Date().toISOString();
+  fs.writeFileSync(
+    path.join(remoteDir, 'version.json'),
+    JSON.stringify({
+      updatedAt: freshRemoteIso, // 刚核对过上游
+      files: { schedule: freshRemoteIso, catalog: freshRemoteIso, liverooms: freshRemoteIso },
+    })
+  );
+  fs.writeFileSync(
+    path.join(remoteDir, 'schedule.json'),
+    JSON.stringify({
+      updatedAt: freshRemoteIso,
+      source: '远端新内容',
+      total: (localSched.matches || []).length,
+      matches: localSched.matches || [],
+    })
+  );
+  const sameContentPage = await ctx.newPage();
+  // 把本地那份 version.json 做成 72 小时前（模拟"部署后一直没更新"）
+  await sameContentPage.route(
+    (url) => url.hostname === '127.0.0.1' && url.pathname.endsWith('/data/version.json'),
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify({
+          updatedAt: oldLocalIso,
+          files: { schedule: oldLocalIso, catalog: oldLocalIso, liverooms: oldLocalIso },
+        }),
+      });
+    }
+  );
+  await sameContentPage.addInitScript((b) => {
+    window.__LPLTV_DATA_BASE__ = b;
+  }, remoteBase);
+  await sameContentPage.goto(base + '/#/schedule', { waitUntil: 'domcontentloaded' });
+  await sameContentPage.waitForTimeout(5000);
+  const sameContent = await sameContentPage.evaluate(() => ({
+    label: (document.querySelector('.updated-at') || {}).textContent || '',
+    banner: !!document.querySelector('.sched-stale'),
+  }));
+  console.log('   本地 72 小时旧 + 远端刚核对: ' + JSON.stringify(sameContent));
+  check(
+    '本地快照很旧但远端刚核对过时，不误报「已滞后」（用远端的核对时间）',
+    !sameContent.banner && !/天前/.test(sameContent.label),
+    sameContent.label + ' banner=' + sameContent.banner
+  );
+  await sameContentPage.close();
 
   // 远端不可用 → 必须回退本地快照，站点照常可用
   const deadPage = await ctx.newPage();
