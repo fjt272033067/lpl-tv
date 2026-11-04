@@ -112,6 +112,20 @@ jobs:
           set -o pipefail
           node tools/bake.mjs --vods=${{ github.event.inputs.vods || '160' }} 2>&1 | tee bake.out.txt
 
+      # ============================================================
+      # 合规门禁：数据层绝不能含屏蔽词原文，否则不提交
+      # ============================================================
+      # 背景（2026-11-04）：站点被反复判「信息不合规 / 内容撤回」。
+      # 真因是弹幕缓存短路 —— site/data/dm/*.json 里 10-25/10-29 抓的
+      # 原始谩骂文本一直没被过滤，而 CI 每轮都把 site/data 推回公开仓库。
+      # 运行时过滤只挡 DOM，挡不住可批量下载的 JSON → 审核爬虫直接读到原文。
+      # 现在烘焙前会先清洗一遍（tools/scrub-danmaku.mjs），这里再卡一道：
+      # 只要还有残留，job 失败、**不提交**，线上就不会被再次投毒。
+      - name: 合规门禁（数据层不得含屏蔽词原文）
+        run: |
+          set -o pipefail
+          node tools/scrub-danmaku.mjs --check
+
       - name: 提交数据
         run: |
           set -o pipefail

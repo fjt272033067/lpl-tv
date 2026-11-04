@@ -803,6 +803,51 @@ function check(name, pass, detail) {
     check('页面没有微信专属提示条（19.3）', dmSafe.wxTip === false, 'wx-tip=' + dmSafe.wxTip);
     check('页面文案无「在浏览器打开」类引导跳出微信的话（19.3）', dmSafe.jumpPrompt === false, '命中=' + dmSafe.jumpPrompt);
     check('页脚有内容合规声明', dmSafe.footCompliance === true, 'foot=' + dmSafe.footCompliance);
+
+    // 数据层合规：site/data 下的全部 JSON 不得含屏蔽词原文。
+    // 运行时过滤只挡 DOM，**挡不住可批量下载的 JSON** —— 审核爬虫直连
+    // raw.githubusercontent.com 的 site/data/dm/*.json 就能读到原文，
+    // 这正是 2026-11-04「天天被判不合规 / 内容撤回」的真因。
+    {
+      const fsMod = await import('node:fs');
+      const pathMod = await import('node:path');
+      const urlMod = await import('node:url');
+      const { hasAbuse } = await import('./abuse-words.mjs');
+      const ROOT = pathMod.resolve(urlMod.fileURLToPath(new URL('.', import.meta.url)), '..');
+      const dataDir = pathMod.join(ROOT, 'site', 'data');
+      const scan = (v) => {
+        if (typeof v === 'string') return hasAbuse(v) ? 1 : 0;
+        if (Array.isArray(v)) return v.reduce((n, it) => n + scan(it), 0);
+        if (v && typeof v === 'object') return Object.values(v).reduce((n, it) => n + scan(it), 0);
+        return 0;
+      };
+      const offenders = [];
+      const walk = (d) => {
+        for (const e of fsMod.readdirSync(d, { withFileTypes: true })) {
+          const p = pathMod.join(d, e.name);
+          if (e.isDirectory()) {
+            walk(p);
+            continue;
+          }
+          if (!e.name.endsWith('.json')) continue;
+          let obj;
+          try {
+            obj = JSON.parse(fsMod.readFileSync(p, 'utf8'));
+          } catch {
+            continue;
+          }
+          const n = scan(obj);
+          if (n) offenders.push(`${pathMod.relative(ROOT, p)}:${n}`);
+        }
+      };
+      if (fsMod.existsSync(dataDir)) walk(dataDir);
+      check(
+        '数据层无屏蔽词原文（site/data 全部 JSON）',
+        offenders.length === 0,
+        offenders.length ? `命中 ${offenders.length} 个文件 → ${offenders.slice(0, 5).join(' ')}` : 'clean'
+      );
+    }
+
     await page.screenshot({ path: path.join(SHOTS, '05-watch-danmaku.png') });
 
     // 切清晰度

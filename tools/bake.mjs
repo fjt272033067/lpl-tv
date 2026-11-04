@@ -16,6 +16,7 @@ import { fetchLiveRoom } from './bili-live.mjs';
 import { BILI_ROOM_IDS, EXTERNAL_ROOMS } from './live-rooms.mjs';
 import { sanitizeText } from './sanitize-danmaku.mjs';
 import { hasAbuse } from './abuse-words.mjs';
+import { scrubDataDir } from './scrub-danmaku.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -544,6 +545,24 @@ function matchPending(schedule, pool, candidates) {
 
 async function main() {
   const t0 = Date.now();
+
+  // [0] 数据层合规清洗 —— 必须放在最前面。
+  //    原因：弹幕文件是**缓存复用**的（下面 outFile 已存在就 continue），
+  //    这些文件是 10-25/10-29 写的，早于 11-02 的屏蔽词表 → 原始谩骂文本
+  //    一直留在公开数据里，CI 每轮又把 site/data 推回仓库，站点天天被判不合规。
+  //    运行时过滤只挡 DOM，挡不住可批量下载的 JSON。
+  console.log('[0/4] 合规清洗旧弹幕缓存…');
+  {
+    const s = scrubDataDir(DATA, true);
+    if (s.filesChanged) {
+      console.log(
+        `      清洗 ${s.filesChanged} 个文件：丢弃含屏蔽词的弹幕 ${s.dropped} 条，打码 ${s.masked} 处`
+      );
+    } else {
+      console.log('      数据层无屏蔽词命中');
+    }
+  }
+
   console.log('[1/4] 抓取腾讯 LPL 赛程…');
   const matches = await fetchTencentCatalog();
   console.log(`      录像条目 ${matches.length} 条`);
