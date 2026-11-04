@@ -352,6 +352,28 @@ node tools/stamp-assets.mjs
 > 另有一条兜底：一个直播间都没抓到时**不覆盖**旧的 `liverooms.json`，
 > 站点至少还能给出「官方直播间 ↗」出口。
 
+### 合规门禁：数据层不得含屏蔽词原文
+
+> 背景（2026-11-04）：站点曾被反复判「信息不合规 / 内容撤回」。
+> 真因不在页面，而在**数据层** —— `bake.mjs` 的缓存短路让 10-25 / 10-29 抓的旧弹幕文件
+> 永远绕过过滤器，而 CI 每 20 分钟又把 `site/data` 推回公开仓库。
+> 运行时过滤只挡 DOM，**挡不住可批量下载的 JSON**（审核读的是文件内容）。
+
+```bash
+node tools/scrub-danmaku.mjs           # 清洗 site/data 下全部 JSON 并写回
+node tools/scrub-danmaku.mjs --check   # 只检查，有残留则退出码 1（CI 门禁用）
+```
+
+- **烘焙前必清洗**：`tools/bake.mjs` 的 `[0/4]` 步骤先扫全量数据，覆盖缓存短路留下的老文件；
+- **CI 提交前必过门禁**：`.github/workflows/refresh-data.yml` 的「合规门禁」步骤跑 `--check`，
+  有残留则 job 失败、**不提交** —— 线上不会再被投毒；
+- **自动化断言**：`tools/verify.mjs` 新增「数据层无屏蔽词原文（site/data 全部 JSON）」；
+- 词表唯一来源是 `site/assets/abuse-words.js`，Node 侧由 `tools/abuse-words.mjs` 读同一份；
+  ASCII 短词（tm / nm / sb）按词边界匹配，不误伤「letme」「TMWBG」。
+
+本次清洗结果：126 个文件、丢弃 1157 条含屏蔽词弹幕（占清洗前总量 0.37%）。
+完整说明见 `docs/申诉材料/整改说明.md`（第三版）。
+
 ## 端到端验收
 
 ```bash
