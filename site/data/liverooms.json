@@ -1,5 +1,5 @@
 {
- "updatedAt": "2026-11-09T09:10:53.904Z",
+ "updatedAt": "2026-11-09T09:31:09.526Z",
  "currentMatch": "",
  "rooms": [
   {
@@ -7,15 +7,15 @@
    "uid": 50329118,
    "title": "【预告】15号3点GEN vs BLG",
    "live": true,
-   "online": 2942338,
-   "attention": 17632783,
+   "online": 2864938,
+   "attention": 17632762,
    "uname": "",
    "area": "游戏赛事",
    "cover": "data/cover/7734200.jpg",
    "stream": {
-    "url": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/366347/live_7734200_bs_1348183_1500.m3u8?expires=1794219051&len=0&oi=2153068400&pt=web&qn=150&trid=10006f68d1d947f9753236e6499c956af18e&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=e570c70b1395b8b0d142d75820a9e6f9&site=5028f17650750095d67b01d1af71cd0b&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&media_type=0&hot_cdn=909773&codec=0&sk=e1f4ebebe465a2c143c02b0228f25a8b&deploy_env=prod&suffix=1500&hdr_type=0&cid=7734200&score=100&source=puv3_onetier&p2p_type=-1&origin_bitrate=546&info_source=hot_cache&sl=10&pp=&vd=bc&src=puv3&order=1",
-    "flvUrl": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/366347/live_7734200_bs_1348183_1500.flv?expires=1794219051&len=0&oi=2153068400&pt=web&qn=150&trid=10006f68d1d947f9753236e6499c956af18e&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=e570c70b1395b8b0d142d75820a9e6f9&site=5028f17650750095d67b01d1af71cd0b&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&media_type=0&hot_cdn=909773&codec=0&sk=e1f4ebebe465a2c143c02b0228f25a8b&deploy_env=prod&suffix=1500&hdr_type=0&cid=7734200&score=100&source=puv3_onetier&p2p_type=-1&origin_bitrate=546&info_source=hot_cache&sl=10&pp=&vd=bc&src=puv3&order=1",
-    "expires": 1794219051,
+    "url": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/577864/live_50329118_9516950_1500.m3u8?expires=1794220267&len=0&oi=77262023&pt=web&qn=150&trid=100072021b34692d355b4f2ff0523c6af192&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=47ba56d5cc9feba75df1f9b34d23405f&site=429b2585bf7379d92e4e72c773a52c1d&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&hot_cdn=909773&info_source=hot_cache&cid=7734200&p2p_type=-1&media_type=0&pp=&score=100&hdr_type=0&origin_bitrate=537&suffix=1500&codec=0&deploy_env=prod&sl=10&sk=bb76d57d3d41df8544cbd17ff795d427&source=puv3_onetier&vd=bc&src=puv3&order=1",
+    "flvUrl": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/577864/live_50329118_9516950_1500.flv?expires=1794220267&len=0&oi=77262023&pt=web&qn=150&trid=100072021b34692d355b4f2ff0523c6af192&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=47ba56d5cc9feba75df1f9b34d23405f&site=429b2585bf7379d92e4e72c773a52c1d&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&hot_cdn=909773&info_source=hot_cache&cid=7734200&p2p_type=-1&media_type=0&pp=&score=100&hdr_type=0&origin_bitrate=537&suffix=1500&codec=0&deploy_env=prod&sl=10&sk=bb76d57d3d41df8544cbd17ff795d427&source=puv3_onetier&vd=bc&src=puv3&order=1",
+    "expires": 1794220267,
     "qn": 150,
     "qnName": "高清",
     "type": "hls"
@@ -27,15 +27,15 @@
    "uid": 50329220,
    "title": "2026英雄联盟全球总决赛二路直播间",
    "live": true,
-   "online": 27693,
-   "attention": 4292715,
+   "online": 26481,
+   "attention": 4292706,
    "uname": "",
    "area": "游戏赛事",
    "cover": "data/cover/8016907.jpg",
    "stream": {
-    "url": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/417669/live_tyq9w_S9VH4Y2_4mrcc_2500.m3u8?expires=1794219052&len=0&oi=2153068400&pt=web&qn=250&trid=100019138692ae8c1e86135761d45a6af18e&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=3519270a85563edcecf3474c5f7dae88&site=0ab75e62be0ab96328c0639fc97aa8fb&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&pp=rtmp&cid=8016907&origin_bitrate=1044&sk=7b9ca197a822eebb7933bf2a49b49d0fad58186c9dbf530d8c6e1decc931dce1&deploy_env=prod&hdr_type=0&score=100&source=puv3_onetier&p2p_type=-1&codec=0&suffix=2500&hot_cdn=852364&info_source=hot_cache&sl=10&media_type=0&vd=bc&src=puv3&order=1",
-    "flvUrl": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/417669/live_tyq9w_S9VH4Y2_4mrcc_2500.flv?expires=1794219052&len=0&oi=2153068400&pt=web&qn=250&trid=100019138692ae8c1e86135761d45a6af18e&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=3519270a85563edcecf3474c5f7dae88&site=0ab75e62be0ab96328c0639fc97aa8fb&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&pp=rtmp&cid=8016907&origin_bitrate=1044&sk=7b9ca197a822eebb7933bf2a49b49d0fad58186c9dbf530d8c6e1decc931dce1&deploy_env=prod&hdr_type=0&score=100&source=puv3_onetier&p2p_type=-1&codec=0&suffix=2500&hot_cdn=852364&info_source=hot_cache&sl=10&media_type=0&vd=bc&src=puv3&order=1",
-    "expires": 1794219052,
+    "url": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/951328/live_tyq9w_S9VH4Y2_4mrcc_2500.m3u8?expires=1794220268&len=0&oi=77262023&pt=web&qn=250&trid=10001d9770d6536fa1ca7e1e4da4676af192&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=6d43ed806824153cd040df95c5470426&site=4fa0ca5266d2ebf1685a39e7cc4d4261&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&sk=7b9ca197a822eebb7933bf2a49b49d0fad58186c9dbf530d8c6e1decc931dce1&sl=10&media_type=0&hdr_type=0&source=puv3_onetier&codec=0&pp=rtmp&origin_bitrate=1365&score=100&info_source=hot_cache&deploy_env=prod&hot_cdn=852364&cid=8016907&suffix=2500&p2p_type=-1&vd=bc&src=puv3&order=1",
+    "flvUrl": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/951328/live_tyq9w_S9VH4Y2_4mrcc_2500.flv?expires=1794220268&len=0&oi=77262023&pt=web&qn=250&trid=10001d9770d6536fa1ca7e1e4da4676af192&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=6d43ed806824153cd040df95c5470426&site=4fa0ca5266d2ebf1685a39e7cc4d4261&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&sk=7b9ca197a822eebb7933bf2a49b49d0fad58186c9dbf530d8c6e1decc931dce1&sl=10&media_type=0&hdr_type=0&source=puv3_onetier&codec=0&pp=rtmp&origin_bitrate=1365&score=100&info_source=hot_cache&deploy_env=prod&hot_cdn=852364&cid=8016907&suffix=2500&p2p_type=-1&vd=bc&src=puv3&order=1",
+    "expires": 1794220268,
     "qn": 250,
     "qnName": "超清",
     "type": "hls"
@@ -48,7 +48,7 @@
    "title": "早安S16 为BLG喝彩",
    "live": false,
    "online": 0,
-   "attention": 105655,
+   "attention": 105652,
    "uname": "",
    "area": "英雄联盟",
    "cover": "",
