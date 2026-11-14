@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>总决赛跟赛 · 实时比分 / 胜率预测 / 社群评论 · LPL-TV</title>
+    <meta
+      name="description"
+      content="LPL-TV 总决赛跟赛面板：实时比分与数据来源标注、可解释的胜率概率预测（显示完整推导链）、两队历史数据对比与自动看点解读、社群热词与情绪跟进。"
+    />
+    <meta name="theme-color" content="#0b0e14" />
+    <meta name="referrer" content="no-referrer" />
+    <!-- 远端数据基址（与主站一致）：页面优先读远端最新的 schedule.json，取不到回退本地快照 -->
+    <meta
+      name="lpl-tv-data-base"
+      content="https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data"
+    />
+    <meta
+      name="lpl-tv-data-mirrors"
+      content="https://gh-proxy.com/https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data, https://gcore.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data, https://cdn.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data"
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300b3ff'/%3E%3Cpath d='M14 20h36v24H14z' fill='none' stroke='%23fff' stroke-width='4'/%3E%3Cpath d='M26 28l14 8-14 8z' fill='%23fff'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="assets/match.css?v=82863ff1f2" />
+  </head>
+  <body>
+    <header class="m-top">
+      <div class="m-top-in">
+        <a class="m-brand" href="./index.html">
+          <span class="m-brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 64 64" width="24" height="24">
+              <rect width="64" height="64" rx="14" fill="currentColor" opacity=".18" />
+              <path d="M14 20h36v24H14z" fill="none" stroke="currentColor" stroke-width="4" />
+              <path d="M26 28l14 8-14 8z" fill="currentColor" />
+            </svg>
+          </span>
+          <span class="m-brand-text"><b>LPL-TV</b><small>总决赛跟赛面板</small></span>
+        </a>
+        <nav class="m-nav">
+          <a href="./index.html#/live">直播页</a>
+          <a href="./index.html#/schedule">赛程</a>
+          <a href="./index.html#/vod">录像库</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="m-wrap">
+      <!-- ── 记分牌 ───────────────────────────────────────────── -->
+      <section class="card sb" id="sb">
+        <div class="sb-head">
+          <div class="sb-meta" id="sb-meta">正在载入赛事信息…</div>
+          <div class="sb-state" id="sb-state"><span class="dot"></span><span id="sb-state-text">连接中</span></div>
+        </div>
+
+        <div class="sb-board">
+          <div class="sb-team sb-a">
+            <img class="sb-logo" id="sb-logo-a" alt="" hidden />
+            <div class="sb-name" id="sb-name-a">—</div>
+            <div class="sb-tag" id="sb-tag-a"></div>
+          </div>
+          <div class="sb-score">
+            <div class="sb-nums">
+              <span id="sb-score-a">–</span><i>:</i><span id="sb-score-b">–</span>
+            </div>
+            <div class="sb-note" id="sb-note"></div>
+          </div>
+          <div class="sb-team sb-b">
+            <img class="sb-logo" id="sb-logo-b" alt="" hidden />
+            <div class="sb-name" id="sb-name-b">—</div>
+            <div class="sb-tag" id="sb-tag-b"></div>
+          </div>
+        </div>
+
+        <div class="sb-source">
+          <div class="sb-src" id="sb-src">比分来源：<b>—</b></div>
+          <div class="sb-ctl">
+            <button class="btn-ghost" id="btn-manual" type="button">手动指定比分</button>
+            <button class="btn-ghost" id="btn-refresh" type="button">刷新比分</button>
+          </div>
+        </div>
+
+        <div class="sb-manual" id="sb-manual" hidden>
+          <label>GEN 胜局 <input type="number" id="in-a" min="0" max="3" step="1" value="0" /></label>
+          <label>BLG 胜局 <input type="number" id="in-b" min="0" max="3" step="1" value="0" /></label>
+          <button class="btn" id="btn-apply" type="button">应用</button>
+          <button class="btn-ghost" id="btn-clear" type="button">清除手动值</button>
+          <span class="hint">手动值会覆盖自动比分（存在本机 localStorage，刷新不丢）</span>
+        </div>
+      </section>
+
+      <!-- ── 胜率概率 ─────────────────────────────────────────── -->
+      <section class="card prob" id="prob">
+        <div class="card-hd">
+          <h2>胜率概率预测</h2>
+          <span class="card-sub" id="prob-sub">Bradley-Terry 对位单小局胜率 + 负二项 BO5 结算</span>
+        </div>
+        <div class="prob-bar">
+          <div class="prob-side prob-a">
+            <span class="prob-name" id="prob-name-a">—</span>
+            <span class="prob-pct" id="prob-pct-a">—</span>
+          </div>
+          <div class="prob-track">
+            <div class="prob-fill" id="prob-fill"></div>
+            <div class="prob-mid"></div>
+          </div>
+          <div class="prob-side prob-b">
+            <span class="prob-pct" id="prob-pct-b">—</span>
+            <span class="prob-name" id="prob-name-b">—</span>
+          </div>
+        </div>
+        <div class="prob-why" id="prob-why">正在计算…</div>
+        <details class="prob-steps">
+          <summary>展开完整推导链（每一步都能手算复核）</summary>
+          <ol id="prob-steps"></ol>
+        </details>
+      </section>
+
+      <!-- ── 直播源 ───────────────────────────────────────────── -->
+      <section class="card stream" id="stream">
+        <div class="card-hd">
+          <h2>直播源</h2>
+          <span class="card-sub" id="stream-sub">腾讯官方公开直播地址（无 token，永久有效）</span>
+        </div>
+        <div class="video-box" id="video-box">
+          <video id="player" playsinline controls preload="none"></video>
+          <div class="video-hint" id="video-hint">点击下方清晰度按钮开始播放</div>
+        </div>
+        <div class="stream-ctl" id="stream-ctl"></div>
+        <div class="stream-links" id="stream-links"></div>
+      </section>
+
+      <!-- ── 两队对比 ─────────────────────────────────────────── -->
+      <section class="card compare" id="compare">
+        <div class="card-hd"><h2>两队本届赛事数据对比</h2><span class="card-sub" id="compare-sub"></span></div>
+        <div class="cmp-table" id="cmp-table"></div>
+      </section>
+
+      <!-- ── 看点解读 ─────────────────────────────────────────── -->
+      <section class="card insight" id="insight">
+        <div class="card-hd"><h2>看点解读</h2><span class="card-sub">全部由站内赛程数据实算生成</span></div>
+        <ul class="ins-list" id="ins-list"></ul>
+      </section>
+
+      <!-- ── 社群跟进 ─────────────────────────────────────────── -->
+      <section class="card social" id="social">
+        <div class="card-hd">
+          <h2>社群实时评论跟进</h2>
+          <span class="card-sub" id="social-sub">多源弹幕聚合 → 热词 / 情绪 / 里程碑</span>
+        </div>
+        <div class="dm-status" id="dm-status"></div>
+        <div class="dm-live" id="dm-live"></div>
+        <div class="social-grid">
+          <div class="social-box">
+            <h3>热词 Top</h3>
+            <div class="hot-words" id="hot-words"></div>
+          </div>
+          <div class="social-box">
+            <h3>情绪倾向</h3>
+            <div id="sentiment"></div>
+          </div>
+          <div class="social-box wide">
+            <h3>里程碑事件</h3>
+            <div class="milestones" id="milestones"></div>
+          </div>
+        </div>
+      </section>
+
+      <p class="m-foot">
+        非腾讯官方站点 · 本站不存储、不转存任何视频文件 · 比分与概率均标注来源，模型输入全部来自站内公开赛程数据实算，不做人工编造
+      </p>
+    </main>
+
+    <div class="m-toast" id="toast" hidden></div>
+
+    <script src="assets/vendor/hls.min.js"></script>
+    <script src="assets/abuse-words.js?v=82863ff1f2"></script>
+    <script src="assets/live-danmaku.js?v=82863ff1f2"></script>
+    <script src="assets/match.js?v=82863ff1f2"></script>
+  </body>
+</html>

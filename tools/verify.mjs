@@ -1249,6 +1249,37 @@ function check(name, pass, detail) {
       const res = await route.fetch();
       const body = await res.json();
       body.updatedAt = new Date(Date.now() - 5 * 86400000).toISOString();
+      // ⚠️ 必须**注入**一条确定存在的未来未开打场次。
+      // 这条判据原本依赖「休赛期恰好有远期未开打场次」——决赛开打后这个场景
+      // 就不存在了，于是把「场景不存在」误报成回归（app.js 的行为其实是对的：
+      // 正在直播的场次不标「待确认」，因为实时数据是权威的）。
+      // 判据要自己造场景，不能指望真实数据恰好长成需要的样子。
+      const rows = body.matches || [];
+      const last = rows[rows.length - 1];
+      if (last) {
+        const future = new Date(Date.now() + 2 * 86400000);
+        const p2 = (n) => String(n).padStart(2, '0');
+        rows.push({
+          ...last,
+          id: '',
+          title: 'TST_A vs TST_B',
+          teamA: 'TST_A',
+          teamB: 'TST_B',
+          teamIdA: '99991',
+          teamIdB: '99992',
+          score: '0:0',
+          date:
+            future.getFullYear() +
+            '-' + p2(future.getMonth() + 1) +
+            '-' + p2(future.getDate()) +
+            ' ' + p2(future.getHours()) +
+            ':' + p2(future.getMinutes()) +
+            ':00',
+          published: false,
+          bvid: '',
+          biliPage: 0,
+        });
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json; charset=utf-8',
@@ -1864,9 +1895,24 @@ function check(name, pass, detail) {
       missing.length === 0 && extra.length === 0,
       `缺 ${missing.length} 多 ${extra.length}` + (missing.length ? ' 例:' + missing[0] : '')
     );
-    const snapTs = Date.parse(local.updatedAt || '');
-    const ageH = (Date.now() - snapTs) / 3600000;
-    check('赛程快照时间在 48 小时内', isFinite(ageH) && ageH < 48, `滞后 ${Math.round(ageH)} 小时`);
+    // ⚠️ 分文件判龄：schedule.json 的 updatedAt 语义是「**上游内容最后变化时间**」
+    // （bake.mjs 只在内容真的变了才更新它）——腾讯自 11-09 起赛程内容没变，
+    // 它就冻结在 11-09，拿它判「快照太旧」必然误报。
+    // 真正表示「上次核对上游的时间」的是 version.json.updatedAt，页面也是读它。
+    const ver = JSON.parse(fs.readFileSync(path.join(SITE, 'data', 'version.json'), 'utf8'));
+    const verTs = Date.parse(ver.updatedAt || '');
+    const verAgeH = (Date.now() - verTs) / 3600000;
+    check(
+      '数据核对时间在 48 小时内（口径：version.json = 上次核对上游的时间）',
+      isFinite(verAgeH) && verAgeH < 48,
+      `滞后 ${Math.round(verAgeH)} 小时`
+    );
+    const contentTs = Date.parse(local.updatedAt || '');
+    check(
+      '赛程内容时间不晚于核对时间',
+      !isFinite(contentTs) || contentTs <= verTs,
+      `内容 ${local.updatedAt} / 核对 ${ver.updatedAt}`
+    );
   } catch (e) {
     check('赛程快照与腾讯上游一致（已淘汰队伍不会残留在后续赛程）', false, '上游抓取失败：' + e.message);
   }

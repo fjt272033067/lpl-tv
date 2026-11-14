@@ -1,0 +1,494 @@
+{
+ "updatedAt": "2026-11-14T20:57:02.568Z",
+ "source": {
+  "schedule": "site/data/schedule.json",
+  "scheduleUpdatedAt": "2026-11-09T06:26:55.568Z",
+  "danmakuFiles": 201
+ },
+ "match": {
+  "gameId": "",
+  "bMatchId": "",
+  "tournament": "2026全球总决赛",
+  "phase": "决赛",
+  "mode": "BO5",
+  "date": "2026-11-15 03:00:00",
+  "place": "美国 纽约市布鲁克林",
+  "teamA": "GEN",
+  "teamB": "BLG",
+  "score": "0:0"
+ },
+ "teams": {
+  "GEN": {
+   "series": {
+    "w": 5,
+    "l": 0,
+    "played": 5
+   },
+   "games": {
+    "w": 10,
+    "l": 1
+   },
+   "bo5": {
+    "w": 2,
+    "l": 0,
+    "played": 2,
+    "gamesW": 6,
+    "gamesL": 0,
+    "sweeps": 2,
+    "series": [
+     {
+      "date": "2026-11-05 06:00:00",
+      "phase": "四分之一决赛",
+      "opponent": "LYON",
+      "score": "3:0",
+      "mode": "BO5",
+      "won": true
+     },
+     {
+      "date": "2026-11-08 06:00:00",
+      "phase": "半决赛",
+      "opponent": "IG",
+      "score": "3:0",
+      "mode": "BO5",
+      "won": true
+     }
+    ],
+    "sweepRate": 1
+   },
+   "restDays": 7,
+   "lastMatch": {
+    "date": "2026-11-08 06:00:00",
+    "opponent": "IG"
+   }
+  },
+  "BLG": {
+   "series": {
+    "w": 5,
+    "l": 2,
+    "played": 7
+   },
+   "games": {
+    "w": 11,
+    "l": 4
+   },
+   "bo5": {
+    "w": 2,
+    "l": 0,
+    "played": 2,
+    "gamesW": 6,
+    "gamesL": 1,
+    "sweeps": 1,
+    "series": [
+     {
+      "date": "2026-11-06 06:00:00",
+      "phase": "四分之一决赛",
+      "opponent": "DK",
+      "score": "3:0",
+      "mode": "BO5",
+      "won": true
+     },
+     {
+      "date": "2026-11-09 06:00:00",
+      "phase": "半决赛",
+      "opponent": "T1",
+      "score": "3:1",
+      "mode": "BO5",
+      "won": true
+     }
+    ],
+    "sweepRate": 0.5
+   },
+   "restDays": 6,
+   "lastMatch": {
+    "date": "2026-11-09 06:00:00",
+    "opponent": "T1"
+   }
+  }
+ },
+ "h2h": {
+  "played": 1,
+  "matches": [
+   {
+    "date": "2026-11-15 03:00:00",
+    "event": "2026全球总决赛",
+    "score": "0:0",
+    "a": "GEN",
+    "b": "BLG"
+   }
+  ]
+ },
+ "model": {
+  "method": "Bradley-Terry 对位单小局胜率 + 负二项 BO5 结算",
+  "inputs": {
+   "a": {
+    "team": "GEN",
+    "bo5GamesWon": 6,
+    "bo5GamesLost": 0,
+    "smoothed": 0.875
+   },
+   "b": {
+    "team": "BLG",
+    "bo5GamesWon": 6,
+    "bo5GamesLost": 1,
+    "smoothed": 0.7777777777777778
+   }
+  },
+  "perGameWinProb": 0.5294117647058824,
+  "prior": 0.5550199773639177,
+  "derivation": [
+   "GEN 本届 BO5 小局 6胜0负 → 平滑 (6+1)/(6+2) = 0.8750",
+   "BLG 本届 BO5 小局 6胜1负 → 平滑 (6+1)/(7+2) = 0.7778",
+   "对位单小局胜率 p = 0.8750 / (0.8750 + 0.7778) = 0.5294",
+   "赛前先验（0:0）= p³(1 + 3q + 6q²) = 55.50%"
+  ]
+ },
+ "danmaku": {
+  "sampleCount": 9880,
+  "hotDict": [
+   "GEN",
+   "BLG",
+   "Canyon",
+   "Chovy",
+   "Zeu",
+   "Bin",
+   "knight",
+   "On",
+   "Faker",
+   "View",
+   "Delight",
+   "Lehends",
+   "Bdd",
+   "Yike",
+   "Ruler",
+   "Peyz",
+   "Elk",
+   "T1",
+   "IG",
+   "HLE",
+   "DK",
+   "KT",
+   "C9",
+   "KC",
+   "TLAW",
+   "MKOI",
+   "VKS",
+   "FNC",
+   "PSG",
+   "AL",
+   "G2",
+   "FLY",
+   "GAM",
+   "LYON",
+   "S16",
+   "拿下",
+   "零封",
+   "逆转",
+   "翻盘",
+   "一穿",
+   "三杀",
+   "四杀",
+   "五杀",
+   "团灭",
+   "一血",
+   "大龙",
+   "男爵",
+   "先锋",
+   "决胜局",
+   "晋级",
+   "冠军",
+   "拉扯",
+   "差距",
+   "状态",
+   "手感",
+   "节奏",
+   "运营",
+   "视野",
+   "资源",
+   "团战",
+   "龙团",
+   "双排",
+   "联动",
+   "打野",
+   "中单",
+   "辅助",
+   "上单",
+   "下路",
+   "AD",
+   "稳健",
+   "激进",
+   "绝活",
+   "招牌",
+   "掏出",
+   "藏牌",
+   "暂停",
+   "阵容",
+   "BP",
+   "闪现",
+   "推塔",
+   "点塔",
+   "牛",
+   "强",
+   "稳",
+   "菜",
+   "拉",
+   "崩",
+   "寄",
+   "泪目",
+   "帅",
+   "爽",
+   "香",
+   "绝了",
+   "无敌",
+   "统治",
+   "逆风",
+   "顺风",
+   "梦游",
+   "划水",
+   "摆烂",
+   "白给",
+   "心疼",
+   "难受",
+   "离谱",
+   "下饭",
+   "退钱",
+   "加油"
+  ],
+  "hotWords": [
+   {
+    "word": "Bin",
+    "count": 4234
+   },
+   {
+    "word": "BLG",
+    "count": 3047
+   },
+   {
+    "word": "On",
+    "count": 1910
+   },
+   {
+    "word": "GEN",
+    "count": 471
+   },
+   {
+    "word": "Faker",
+    "count": 418
+   },
+   {
+    "word": "IG",
+    "count": 362
+   },
+   {
+    "word": "强",
+    "count": 262
+   },
+   {
+    "word": "AL",
+    "count": 227
+   },
+   {
+    "word": "上单",
+    "count": 182
+   },
+   {
+    "word": "拉",
+    "count": 162
+   },
+   {
+    "word": "阵容",
+    "count": 157
+   },
+   {
+    "word": "knight",
+    "count": 155
+   },
+   {
+    "word": "牛",
+    "count": 151
+   },
+   {
+    "word": "下路",
+    "count": 141
+   },
+   {
+    "word": "Chovy",
+    "count": 135
+   },
+   {
+    "word": "辅助",
+    "count": 133
+   },
+   {
+    "word": "打野",
+    "count": 133
+   },
+   {
+    "word": "帅",
+    "count": 122
+   },
+   {
+    "word": "冠军",
+    "count": 121
+   },
+   {
+    "word": "稳",
+    "count": 111
+   },
+   {
+    "word": "菜",
+    "count": 105
+   },
+   {
+    "word": "G2",
+    "count": 103
+   },
+   {
+    "word": "T1",
+    "count": 92
+   },
+   {
+    "word": "状态",
+    "count": 81
+   }
+  ],
+  "sentiment": {
+   "positive": 1832,
+   "negative": 616,
+   "index": 74.8,
+   "method": "词典法（正/负情绪词命中次数占比），仅供趋势参考"
+  },
+  "milestones": [
+   {
+    "text": "上单买369打野买xun中单买knight辅助买keria配神肯定拿冠军",
+    "tag": "冠军"
+   },
+   {
+    "text": "faker沙皇一打五四杀位",
+    "tag": "四杀"
+   },
+   {
+    "text": "冠军粉？你blg什么冠军",
+    "tag": "冠军"
+   },
+   {
+    "text": "冠军粉。。可是BLG也没S赛冠军啊",
+    "tag": "冠军"
+   },
+   {
+    "text": "tt进了世界赛也是浪费一个名额 也就这次运气好些拿下blg 虽然我也不喜欢blg",
+    "tag": "拿下"
+   },
+   {
+    "text": "BLG什么冠军 冠军粉？？？",
+    "tag": "冠军"
+   },
+   {
+    "text": "游戏结束！bin的一生之敌",
+    "tag": "结束"
+   },
+   {
+    "text": "blg我们是冠军",
+    "tag": "冠军"
+   },
+   {
+    "text": "营销冠军BLG",
+    "tag": "冠军"
+   },
+   {
+    "text": "说的是不支持BLG的都是冠军粉",
+    "tag": "冠军"
+   },
+   {
+    "text": "blg没一个冠军哪来的冠军粉",
+    "tag": "冠军"
+   },
+   {
+    "text": "冠军粉，你blg什么冠军？",
+    "tag": "冠军"
+   },
+   {
+    "text": "冠军粉？blg国际赛冠军数量跟tt不是差不多？",
+    "tag": "冠军"
+   },
+   {
+    "text": "bin   永远拿不到世界冠军",
+    "tag": "冠军"
+   },
+   {
+    "text": "blg也没夺冠啊，blg粉丝喜欢幻想偷冠军罢了",
+    "tag": "冠军"
+   },
+   {
+    "text": "BLG什么冠军？",
+    "tag": "冠军"
+   },
+   {
+    "text": "Blg虽然输了，但bin哥梦里已经一穿五夺冠了",
+    "tag": "一穿"
+   },
+   {
+    "text": "不仅大龙出生  bin你也出生啊",
+    "tag": "大龙"
+   },
+   {
+    "text": "不可阻挡消失了，是bin主动取消蓄力释放W了，W只有蓄力的时候不可阻挡，蓄力结束",
+    "tag": "结束"
+   },
+   {
+    "text": "BIN哥：WEI,RRR 看我表演一个温远古龙斩AD 单枪匹马结束比赛",
+    "tag": "结束"
+   }
+  ],
+  "milestoneTags": [
+   {
+    "tag": "冠军",
+    "count": 108
+   },
+   {
+    "tag": "先锋",
+    "count": 32
+   },
+   {
+    "tag": "结束",
+    "count": 21
+   },
+   {
+    "tag": "拿下",
+    "count": 19
+   },
+   {
+    "tag": "翻盘",
+    "count": 15
+   },
+   {
+    "tag": "零封",
+    "count": 15
+   },
+   {
+    "tag": "大龙",
+    "count": 12
+   },
+   {
+    "tag": "五杀",
+    "count": 9
+   },
+   {
+    "tag": "决胜局",
+    "count": 4
+   },
+   {
+    "tag": "晋级",
+    "count": 4
+   },
+   {
+    "tag": "推塔",
+    "count": 3
+   },
+   {
+    "tag": "三杀",
+    "count": 3
+   }
+  ],
+  "note": "样本来自站内已过审的历史弹幕（site/data/dm/*.json），不是决赛实时弹幕"
+ }
+}
