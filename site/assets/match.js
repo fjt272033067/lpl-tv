@@ -985,11 +985,36 @@
    * 10. 比分轮询与渲染
    * ================================================================= */
   /**
+   * 比分源选择：**取"更先进的那个"，而不是固定优先级。**
+   *
+   * 为什么不能固定优先级：腾讯静态表在局末就会更新（实测 04:35 → 1:0），
+   * 而 CI 烘焙的快照要等下一轮 CI（最多 20 分钟）。若固定「快照优先」，
+   * 下一局结束到下一轮 CI 之间，页面会**停在旧比分** —— 对跟赛页是实质缺陷。
+   *
+   * 判据：BO5 的系列比分只增不减，所以「已打小局数多」= 更先进。
+   * 平手时优先站内快照（它是站点的规范数据源，且带完整场次上下文）。
+   */
+  function pickScoreSource(snap, tx) {
+    const hasSnap = !!(snap && (snap.a > 0 || snap.b > 0));
+    const hasTx = !!(tx && tx.a !== null && tx.b !== null && (tx.a > 0 || tx.b > 0));
+    if (hasSnap && hasTx) {
+      const sg = snap.a + snap.b;
+      const tg = tx.a + tx.b;
+      if (tg > sg) return 'tencent';
+      if (sg > tg) return 'snapshot';
+      return 'snapshot'; // 平手：优先站内快照
+    }
+    if (hasSnap) return 'snapshot';
+    if (hasTx) return 'tencent';
+    return 'none';
+  }
+
+  /**
    * 比分刷新：来源优先级（高 → 低）
-   *   1. manual  —— 用户手动指定（最高优先级，会覆盖一切）
-   *   2. snapshot —— CI 每 20 分钟烘焙的赛程快照（**实测这是唯一会随比赛更新的源**）
-   *   3. tencent —— 腾讯静态记分牌（边缘节点会滞后，只当备选）
-   *   4. none    —— 都拿不到 → 明说「未获取」，绝不编造
+   *   1. manual   —— 用户手动指定（最高优先级，会覆盖一切）
+   *   2. snapshot —— CI 每 20 分钟烘焙的赛程快照
+   *   3. tencent  —— 腾讯官方记分牌（局末即更新，可能比快照更先进）
+   *   4. none     —— 都拿不到 → 明说「未获取」，绝不编造
    */
   async function refreshScore() {
     const m = STATE.finalMatch;
@@ -1004,36 +1029,34 @@
       STATE.tencentFresh = ageMin !== null && ageMin <= 90;
       STATE.tencentUpdatedAt = txTime;
     }
+    const txScore = tx && tx.a !== null && tx.b !== null ? { a: tx.a, b: tx.b } : null;
+    const snapAgeMin = STATE.scheduleUpdatedAt
+      ? Math.round((Date.now() - new Date(String(STATE.scheduleUpdatedAt).replace(/-/g, '/')).getTime()) / 60000)
+      : null;
+    const snapFresh = snapAgeMin !== null && snapAgeMin <= 40;
 
     if (manual) {
       setScore(manual.a, manual.b, 'manual', '手动指定', '本机设置', true, '');
-    } else if (snap && (snap.a > 0 || snap.b > 0)) {
-      const ageMin = STATE.scheduleUpdatedAt
-        ? Math.round((Date.now() - new Date(String(STATE.scheduleUpdatedAt).replace(/-/g, '/')).getTime()) / 60000)
-        : null;
-      setScore(
-        snap.a,
-        snap.b,
-        'snapshot',
-        '站内赛程快照（CI 每 20 分钟刷新）',
-        STATE.scheduleUpdatedAt,
-        ageMin !== null && ageMin <= 40,
-        ''
-      );
-    } else if (tx && tx.a !== null && tx.b !== null && (tx.a > 0 || tx.b > 0)) {
-      setScore(tx.a, tx.b, 'tencent', '腾讯官方赛事记分牌', STATE.tencentUpdatedAt, STATE.tencentFresh, '');
-    } else if (tx && tx.a !== null && tx.b !== null) {
-      setScore(
-        tx.a,
-        tx.b,
-        'tencent',
-        '腾讯官方赛事记分牌',
-        STATE.tencentUpdatedAt,
-        STATE.tencentFresh,
-        '腾讯记分牌最后更新于 ' + (STATE.tencentUpdatedAt || '未知') + '，尚未刷新本场比分'
-      );
     } else {
-      setScore(null, null, 'none', '未获取到比分', '', false, '');
+      const pick = pickScoreSource(snap, txScore);
+      if (pick === 'snapshot') {
+        setScore(snap.a, snap.b, 'snapshot', '站内赛程快照（CI 每 20 分钟刷新）', STATE.scheduleUpdatedAt, snapFresh, '');
+      } else if (pick === 'tencent') {
+        setScore(txScore.a, txScore.b, 'tencent', '腾讯官方赛事记分牌', STATE.tencentUpdatedAt, STATE.tencentFresh, '');
+      } else if (txScore && txScore.a !== null && txScore.b !== null) {
+        // 两边都是 0:0（或只有一个 0:0 的源）→ 如实显示并说明「尚未刷新」
+        setScore(
+          txScore.a,
+          txScore.b,
+          'tencent',
+          '腾讯官方赛事记分牌',
+          STATE.tencentUpdatedAt,
+          STATE.tencentFresh,
+          '腾讯记分牌最后更新于 ' + (STATE.tencentUpdatedAt || '未知') + '，尚未刷新本场比分'
+        );
+      } else {
+        setScore(null, null, 'none', '未获取到比分', '', false, '');
+      }
     }
     renderScoreboard();
     renderProb();
@@ -1043,11 +1066,75 @@
   /* ================================================================= *
    * 11. 启动
    * ================================================================= */
+  /**
+   * 用烘焙基线先算一版**临时模型**（纯本地文件，秒出）。
+   * 目的：远端赛程要几秒到几十秒才回来，这段时间里胜率条不该是空的。
+   * 基线与运行时用的是同一套公式、同一份数据口径（都排除本场），
+   * 所以临时值与最终值一致；远端数据到了会覆盖它。
+   */
+  function modelFromBaseline(b) {
+    if (!b || !b.match || !b.teams || !b.model) return null;
+    const tA = b.teams[b.match.teamA];
+    const tB = b.teams[b.match.teamB];
+    if (!tA || !tB) return null;
+    const gA = tA.bo5 || {};
+    const gB = tB.bo5 || {};
+    const rA = (gA.gamesW + 1) / (gA.gamesW + gA.gamesL + 2);
+    const rB = (gB.gamesW + 1) / (gB.gamesW + gB.gamesL + 2);
+    const p = rA / (rA + rB);
+    return {
+      p: p,
+      q: 1 - p,
+      prior: b.model.prior,
+      rA: rA,
+      rB: rB,
+      nameA: b.match.teamA,
+      nameB: b.match.teamB,
+      provisional: true,
+      steps: b.model.derivation || [],
+    };
+  }
+
   async function boot() {
     // 基线（模型兜底 + 舆情基线）
     try {
       const b = await fetchJson('data/final-baseline.json', 8000);
-      if (b) STATE.baselines = b;
+      if (b) {
+        STATE.baselines = b;
+        // 先用基线出一版临时模型 → 首屏立刻有胜率，不等远端
+        const provisional = modelFromBaseline(b);
+        if (provisional) {
+          STATE.model = provisional;
+          STATE.finalMatch = {
+            game: b.match.tournament,
+            phase: b.match.phase,
+            mode: b.match.mode,
+            date: b.match.date,
+            place: b.match.place,
+            teamA: b.match.teamA,
+            teamB: b.match.teamB,
+            score: b.match.score,
+            teamIdA: '',
+            teamIdB: '',
+          };
+          STATE.statsA = {
+            series: b.teams[b.match.teamA].series,
+            games: b.teams[b.match.teamA].games,
+            bo5: b.teams[b.match.teamA].bo5,
+            lastMatch: b.teams[b.match.teamA].lastMatch,
+          };
+          STATE.statsB = {
+            series: b.teams[b.match.teamB].series,
+            games: b.teams[b.match.teamB].games,
+            bo5: b.teams[b.match.teamB].bo5,
+            lastMatch: b.teams[b.match.teamB].lastMatch,
+          };
+          renderScoreboard();
+          renderCompare();
+          renderProb();
+          renderInsight();
+        }
+      }
     } catch (e) {}
 
     // 赛程
@@ -1150,5 +1237,6 @@
     teamStats: teamStats,
     hasAbuse: hasAbuse,
     refreshScore: refreshScore,
+    pickScoreSource: pickScoreSource,
   };
 })();

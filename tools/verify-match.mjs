@@ -192,6 +192,33 @@ function check(name, pass, detail) {
     );
   }
 
+  /* ---------- D2 比分源选择：取更先进的那个（不固定优先级） ---------- */
+  const pick = await page.evaluate(() => {
+    const S = window.__LPLTV_MATCH__;
+    const f = S.pickScoreSource;
+    return {
+      txAhead: f({ a: 1, b: 0 }, { a: 2, b: 0 }),
+      snapAhead: f({ a: 2, b: 0 }, { a: 1, b: 0 }),
+      tie: f({ a: 1, b: 0 }, { a: 1, b: 0 }),
+      onlySnap: f({ a: 1, b: 0 }, null),
+      onlyTx: f(null, { a: 1, b: 0 }),
+      none: f(null, null),
+      zeroOnly: f({ a: 0, b: 0 }, { a: 0, b: 0 }),
+      hasFn: typeof f === 'function',
+    };
+  });
+  console.log('   比分源选择: ' + JSON.stringify(pick));
+  check('比分源选择函数已导出', pick.hasFn);
+  check(
+    '腾讯源更先进时选腾讯（局末更新比 CI 快照快）',
+    pick.txAhead === 'tencent',
+    'snap 1:0 vs tx 2:0 → ' + pick.txAhead
+  );
+  check('站内快照更先进时选快照', pick.snapAhead === 'snapshot', 'snap 2:0 vs tx 1:0 → ' + pick.snapAhead);
+  check('两者一致时优先站内快照', pick.tie === 'snapshot', '1:0 vs 1:0 → ' + pick.tie);
+  check('只有一个源可用时用它', pick.onlySnap === 'snapshot' && pick.onlyTx === 'tencent');
+  check('两个源都没有时为 none（不编造）', pick.none === 'none');
+
   /* ---------- E 合规：渲染文本屏蔽词 0 命中 ---------- */
   const abuse = await page.evaluate(() => {
     const S = window.__LPLTV_MATCH__;
@@ -232,7 +259,18 @@ function check(name, pass, detail) {
   const mctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
   const mp = await mctx.newPage();
   await mp.goto(base + '/final.html', { waitUntil: 'domcontentloaded' });
-  await mp.waitForTimeout(7000);
+  // 首屏 2.5 秒内就应给出胜率（用本地烘焙基线先算一版，不等远端赛程）
+  await mp.waitForTimeout(2500);
+  const firstPaint = await mp.evaluate(() => ({
+    pct: (document.getElementById('prob-pct-a') || {}).textContent || '',
+    score: (document.getElementById('sb-score-a') || {}).textContent || '',
+  }));
+  check(
+    '首屏 2.5 秒内就渲染出胜率（不等远端赛程）',
+    /%/.test(firstPaint.pct),
+    'prob-pct-a=' + firstPaint.pct
+  );
+  await mp.waitForTimeout(9000);
   const mob = await mp.evaluate(() => {
     const wrap = document.querySelector('.m-wrap');
     const card = document.querySelector('.card');
