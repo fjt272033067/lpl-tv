@@ -263,9 +263,14 @@ const sentiment = {
 
 /* ---------------------------------------------------------------- *
  * 5. 落盘
+ *
+ * ⚠️ updatedAt 只在**内容真的变了**时才更新（与 bake.mjs 同一口径）。
+ *    否则 CI 每 20 分钟都会因为这个字段产生一次实质提交 —— 数据没变却
+ *    让仓库多一条记录、也让「这次刷新到底改了什么」变得看不清。
  * ---------------------------------------------------------------- */
+const OUT_PATH = path.join(DATA, 'final-baseline.json');
 const out = {
-  updatedAt: new Date().toISOString(),
+  updatedAt: '',
   source: {
     schedule: 'site/data/schedule.json',
     scheduleUpdatedAt: schedule.updatedAt || '',
@@ -312,8 +317,27 @@ const out = {
   },
 };
 
-fs.writeFileSync(path.join(DATA, 'final-baseline.json'), JSON.stringify(out, null, 1), 'utf8');
-console.log('\n基线已写入 site/data/final-baseline.json');
+// 与上一份比：忽略 updatedAt 字段，其余完全一致 → 说明内容没变
+let prevUpdatedAt = '';
+let changed = true;
+if (fs.existsSync(OUT_PATH)) {
+  try {
+    const prev = JSON.parse(fs.readFileSync(OUT_PATH, 'utf8'));
+    prevUpdatedAt = prev.updatedAt || '';
+    const strip = (o) => {
+      const c = JSON.parse(JSON.stringify(o));
+      delete c.updatedAt;
+      return JSON.stringify(c);
+    };
+    changed = strip(prev) !== strip(out);
+  } catch (e) {
+    changed = true;
+  }
+}
+out.updatedAt = changed ? new Date().toISOString() : prevUpdatedAt || new Date().toISOString();
+
+fs.writeFileSync(OUT_PATH, JSON.stringify(out, null, 1), 'utf8');
+console.log('\n基线已写入 site/data/final-baseline.json' + (changed ? '（内容有变化）' : '（内容无变化，沿用原 updatedAt）'));
 console.log('  模型: p =', p.toFixed(4), ' 先验 =', (prior * 100).toFixed(2) + '%');
 console.log('  弹幕样本:', sampleCount, ' 热词:', hotWords.length, ' 情绪:', JSON.stringify(sentiment));
 console.log('  里程碑标签:', out.danmaku.milestoneTags.map((t) => t.tag + '×' + t.count).join(', '));

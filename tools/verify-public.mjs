@@ -670,6 +670,35 @@ await stalePage.route(
     const res = await route.fetch();
     const body = await res.json();
     body.updatedAt = new Date(Date.now() - 5 * 86400000).toISOString();
+    // ⚠️ 必须**注入**一条确定存在的未来未开打场次（与 tools/verify.mjs 同一条纪律）。
+    // 这条判据原本依赖「休赛期恰好有远期未开打场次」——决赛开打后这个场景不存在，
+    // 于是把「场景不存在」误报成回归。判据要自己造场景，不能指望真实数据长成需要的样子。
+    const rows = body.matches || [];
+    const last = rows[rows.length - 1];
+    if (last) {
+      const future = new Date(Date.now() + 2 * 86400000);
+      const p2 = (n) => String(n).padStart(2, '0');
+      rows.push({
+        ...last,
+        id: '',
+        title: 'TST_A vs TST_B',
+        teamA: 'TST_A',
+        teamB: 'TST_B',
+        teamIdA: '99991',
+        teamIdB: '99992',
+        score: '0:0',
+        date:
+          future.getFullYear() +
+          '-' + p2(future.getMonth() + 1) +
+          '-' + p2(future.getDate()) +
+          ' ' + p2(future.getHours()) +
+          ':' + p2(future.getMinutes()) +
+          ':00',
+        published: false,
+        bvid: '',
+        biliPage: 0,
+      });
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json; charset=utf-8',
@@ -728,7 +757,16 @@ try {
     missing.length === 0 && extra.length === 0,
     `缺 ${missing.length} 多 ${extra.length}`
   );
-  check('线上赛程快照在 48 小时内', isFinite(ageH) && ageH < 48, '滞后 ' + Math.round(ageH) + ' 小时');
+  // ⚠️ 判龄口径与 tools/verify.mjs 保持一致：schedule.json 的 updatedAt 语义是
+  // 「上游内容最后变化时间」，内容不变就冻结（腾讯自 11-09 起赛程内容没变）。
+  // 「上次核对上游的时间」是 version.json.updatedAt —— 页面也是读它。
+  const deployedVer = await (await fetch(URL + '/data/version.json')).json();
+  const verAgeH = (Date.now() - Date.parse(deployedVer.updatedAt || '')) / 3600000;
+  check(
+    '线上数据核对时间在 48 小时内（口径：version.json）',
+    isFinite(verAgeH) && verAgeH < 48,
+    '滞后 ' + Math.round(verAgeH) + ' 小时（内容时间滞后 ' + Math.round(ageH) + ' 小时）'
+  );
 } catch (e) {
   check('线上赛程与腾讯上游一致（已淘汰队伍不会残留在后续赛程）', false, '比对失败：' + e.message);
 }
@@ -827,6 +865,55 @@ await mob.close();
 
 console.log('\n[6] 控制台错误');
 console.log(errs.length ? errs.slice(0, 5).map((e) => '   ' + e).join('\n') : '   （无）');
+
+/* ---------------- 跟赛页（/final.html）线上核验 ---------------- */
+console.log('\n[7] 总决赛跟赛页');
+const fp = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const fpErrs = [];
+fp.on('pageerror', (e) => fpErrs.push(String((e && e.message) || e).slice(0, 160)));
+try {
+  await fp.goto(URL + '/final.html', { waitUntil: 'domcontentloaded' });
+  await fp.waitForTimeout(11000);
+  const f = await fp.evaluate(() => {
+    const S = window.__LPLTV_MATCH__;
+    const txt = ['sb', 'prob', 'compare', 'insight', 'social']
+      .map((z) => (document.getElementById(z) || {}).textContent || '')
+      .join('\n');
+    const words = window.__LPLTV_ABUSE_WORDS || [];
+    const hits = [];
+    for (const w of words) {
+      const n = String(w).toLowerCase();
+      const re = /^[a-z]{2,4}$/.test(n) ? new RegExp('(?<![a-z0-9])' + n + '(?![a-z0-9])', 'g') : null;
+      const c = re ? (txt.toLowerCase().match(re) || []).length : txt.toLowerCase().split(n).length - 1;
+      if (c > 0) hits.push(w);
+    }
+    return {
+      score: S ? { ...S.score } : null,
+      p: S && S.state.model ? S.state.model.p : null,
+      prior: S && S.state.model ? S.state.model.prior : null,
+      cmpRows: document.querySelectorAll('#cmp-table tbody tr').length,
+      insItems: document.querySelectorAll('#ins-list li').length,
+      steps: document.querySelectorAll('#prob-steps li').length,
+      qualities: document.querySelectorAll('#stream-ctl button').length,
+      abuseHits: hits,
+      nameA: (document.getElementById('sb-name-a') || {}).textContent || '',
+      nameB: (document.getElementById('sb-name-b') || {}).textContent || '',
+      srcText: (document.getElementById('sb-src') || {}).textContent || '',
+    };
+  });
+  console.log('   ' + JSON.stringify(f).slice(0, 420));
+  check('跟赛页线上可访问且渲染出对阵', !!f.nameA && !!f.nameB, f.nameA + ' vs ' + f.nameB);
+  check('跟赛页两队对比与解读有内容', f.cmpRows >= 5 && f.insItems >= 4, `对比 ${f.cmpRows} 行 / 解读 ${f.insItems} 条`);
+  check('跟赛页胜率推导链已展开', f.steps >= 4, f.steps + ' 步');
+  check('跟赛页比分带来源标注', !!f.score && !!f.score.sourceLabel, f.score ? f.score.sourceLabel : '无');
+  check('跟赛页胜率模型有实算值', typeof f.p === 'number' && f.p > 0 && f.p < 1, 'p=' + f.p);
+  check('跟赛页腾讯官方源给出多档清晰度', f.qualities >= 2, f.qualities + ' 档');
+  check('跟赛页渲染文本屏蔽词命中数为 0', f.abuseHits.length === 0, f.abuseHits.join(',') || '0');
+  check('跟赛页无 JS 运行时错误', fpErrs.length === 0, fpErrs.slice(0, 2).join(' | '));
+} catch (e) {
+  check('跟赛页线上可访问且渲染出对阵', false, '打开失败：' + e.message);
+}
+await fp.close();
 
 await browser.close();
 const pass = results.filter((r) => r.p).length;
