@@ -1055,7 +1055,23 @@
           '腾讯记分牌最后更新于 ' + (STATE.tencentUpdatedAt || '未知') + '，尚未刷新本场比分'
         );
       } else {
-        setScore(null, null, 'none', '未获取到比分', '', false, '');
+        // 两个实时源都拿不到比分 → 退回「上一次已知的比分」（站内烘焙快照），
+        // 而不是让跟赛页整块显示「未获取」。来源与时间照实标注。
+        const b = STATE.baselines;
+        const bs = b ? parseScore(b.match && b.match.score) : null;
+        if (bs && (bs.a > 0 || bs.b > 0)) {
+          setScore(
+            bs.a,
+            bs.b,
+            'baseline',
+            '站内烘焙快照（CI 兜底）',
+            b.updatedAt,
+            false,
+            '实时源暂不可达，显示的是上一次烘焙的比分'
+          );
+        } else {
+          setScore(null, null, 'none', '未获取到比分', '', false, '');
+        }
       }
     }
     renderScoreboard();
@@ -1133,6 +1149,15 @@
           renderCompare();
           renderProb();
           renderInsight();
+          // 基线里也有比分 → 远端全挂时**至少显示上一次已知的比分**，
+          // 并如实标注它是「站内烘焙快照」，而不是显示「未获取」。
+          // （实测：镜像与腾讯 JSONP 同时抖动时，页面曾整块显示「未获取」，
+          //   而其实 CI 快照里就有 1:0。）
+          const bs = parseScore(b.match.score);
+          if (bs && (bs.a > 0 || bs.b > 0)) {
+            setScore(bs.a, bs.b, 'baseline', '站内烘焙快照（CI 兜底）', b.updatedAt, false, '远端数据暂不可达，显示的是上一次烘焙的比分');
+            renderScoreboard();
+          }
         }
       }
     } catch (e) {}

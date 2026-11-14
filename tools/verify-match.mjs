@@ -219,6 +219,54 @@ function check(name, pass, detail) {
   check('只有一个源可用时用它', pick.onlySnap === 'snapshot' && pick.onlyTx === 'tencent');
   check('两个源都没有时为 none（不编造）', pick.none === 'none');
 
+  /* ---------- D3 远端全挂时仍能用本地基线兜底 ---------- */
+  console.log('\n[兜底] 远端镜像全挂');
+  const offPage = await ctx.newPage();
+  await offPage.route(
+    (url) => /raw\.githubusercontent\.com|jsdelivr\.net|gh-proxy\.com|sw\.game\.qq\.com|lpl\.qq\.com/.test(url.hostname + url.pathname),
+    (route) => route.abort()
+  );
+  await offPage.goto(base + '/final.html', { waitUntil: 'domcontentloaded' });
+  await offPage.waitForTimeout(9000);
+  const fallback = await offPage.evaluate(async () => {
+    const S = window.__LPLTV_MATCH__;
+    // 本地快照（未被拦截）里决赛的比分 —— 页面在远端全挂时应当回落到它
+    let localScore = null;
+    try {
+      const j = await fetch('data/schedule.json', { cache: 'no-store' }).then((r) => r.json());
+      const f = (j.matches || []).filter((m) => /决赛/.test(String(m.phase || ''))).sort((a, b) =>
+        String(b.date).localeCompare(String(a.date))
+      )[0];
+      if (f) localScore = f.score;
+    } catch (e) {}
+    return {
+      scoreSource: S.score.source,
+      shown: S.score.known ? S.score.a + ':' + S.score.b : null,
+      localScore: localScore,
+      label: S.score.sourceLabel,
+      pct: (document.getElementById('prob-pct-a') || {}).textContent || '',
+      cmpRows: document.querySelectorAll('#cmp-table tbody tr').length,
+      insItems: document.querySelectorAll('#ins-list li').length,
+    };
+  });
+  console.log('   ' + JSON.stringify(fallback));
+  check(
+    '远端全挂时回落到本地快照的比分（不是空白，也不是编造）',
+    !!fallback.localScore && fallback.shown === fallback.localScore,
+    `页面 ${fallback.shown} / 本地快照 ${fallback.localScore}`
+  );
+  check(
+    '远端全挂时比分仍有来源标注',
+    !!fallback.label && fallback.scoreSource !== 'none',
+    fallback.sourceLabel || '(无)'  );
+  check(
+    '远端全挂时仍给出胜率（用本地基线算，不空白）',
+    /%/.test(fallback.pct),
+    'prob-pct-a=' + fallback.pct
+  );
+  check('远端全挂时对比表与解读仍有内容', fallback.cmpRows >= 5 && fallback.insItems >= 4, `对比 ${fallback.cmpRows} 行 / 解读 ${fallback.insItems} 条`);
+  await offPage.close();
+
   /* ---------- E 合规：渲染文本屏蔽词 0 命中 ---------- */
   const abuse = await page.evaluate(() => {
     const S = window.__LPLTV_MATCH__;

@@ -873,7 +873,8 @@ const fpErrs = [];
 fp.on('pageerror', (e) => fpErrs.push(String((e && e.message) || e).slice(0, 160)));
 try {
   await fp.goto(URL + '/final.html', { waitUntil: 'domcontentloaded' });
-  await fp.waitForTimeout(11000);
+  // 线上网络比本地慢（要走镜像 + 腾讯 JSONP），等够时间再断言
+  await fp.waitForTimeout(22000);
   const f = await fp.evaluate(() => {
     const S = window.__LPLTV_MATCH__;
     const txt = ['sb', 'prob', 'compare', 'insight', 'social']
