@@ -2332,6 +2332,28 @@
     return e - Math.floor(Date.now() / 1000) < (marginSec || 90);
   }
 
+  /**
+   * B 站直播流地址是否**即将**过期（剩余不足 marginSec，默认 10 分钟）。
+   *
+   * 为什么要和「已过期」分开判：
+   *  · B 站签名地址 TTL 只有 60 分钟，且只存在于 CI 烘焙的 liverooms.json 里；
+   *  · 各镜像的 CDN 刷新不同步 → 可能整份数据都是旧的。
+   *    实测某镜像给的是 50 分钟前那份 → 地址**还剩 10 分钟**：
+   *    它没过期（`streamExpired` 判 false、仍算可播），但选它等于给用户
+   *    一个十分钟后就黑屏的播放器。
+   *  → 这种线路降级为「不优先」：有腾讯官方源（URL 无 token、永久有效）时优先用它。
+   */
+  const NEAR_EXPIRY_SEC = 600; // 10 分钟
+  function streamNearExpiry(room, marginSec) {
+    // 没有流的房间是「源未就绪」，不是「快过期」—— 两者要分开，
+    // 否则菜单里会出现「源未就绪 · 即将过期」这种自相矛盾的文案。
+    // （没有流的房间本来就被 streamExpired 判为不可播，不会进主线路。）
+    if (!room || !room.stream) return false;
+    const e = room.stream.expires || 0;
+    if (!e) return false; // 没有过期时间 = 长效地址（腾讯源），不算即将过期
+    return e - Math.floor(Date.now() / 1000) < (marginSec || NEAR_EXPIRY_SEC);
+  }
+
   /** B 站房间的实际授权清晰度（qn：150=480P、250=720P、10000=原画，未登录会被降级） */
   function biliQn(room) {
     return (room && room.stream && Number(room.stream.qn)) || 0;
@@ -2571,16 +2593,19 @@
         return (b.online || 0) - (a.online || 0);
       });
     biliRooms.forEach((r) => {
+      const near = streamNearExpiry(r);
       sources.push({
         id: 'bili-' + r.roomid,
         kind: 'bili',
         // 名称用房间自己的真实标题（不同房间转播不同场次，文案不能一样）
         name: (r.title || 'B站直播间').slice(0, 28),
-        sub: r.roomid + ' · ' + biliQualityLabel(r),
+        // 即将过期的线路在菜单里必须带标记 —— 否则用户点了才发现几分钟后黑屏
+        sub: r.roomid + ' · ' + biliQualityLabel(r) + (near ? ' · 即将过期' : ''),
         platform: '哔哩哔哩',
         cover: r.cover || '',
         room: r,
         expired: streamExpired(r),
+        nearExpiry: near,
         // 过期的流地址不算「可播」——主线路会自动跳过它，避免选到黑屏源
         playable: !!r.stream && !streamExpired(r),
         viewers: r.online || 0,
@@ -2645,11 +2670,13 @@
     // 未开播的腾讯源排到最后（用户反馈：腾讯线路连画面都没有）
     sources.sort((a, b) => (a.healthy === false ? 1 : 0) - (b.healthy === false ? 1 : 0));
 
-    // 主线路：优先「腾讯真在播」（1080P 三档），其次未过期的 B 站房间。
-    // 都没有 → main 为 null，走兜底分支（页面直接摆出平台官方直播间按钮）。
+    // 主线路：优先「腾讯真在播」（永久有效地址），其次**未即将过期**的 B 站房间。
+    // 即将过期的 B 站线路排到最后 —— 选它等于给用户一个几分钟后黑屏的播放器；
+    // 但若一条别的可播源都没有，宁可用快过期的也别留黑屏（下面的兜底分支会说明）。
     const playable = sources.filter((s) => s.playable);
     const main =
       playable.find((s) => s.kind === 'tx' && s.healthy) ||
+      playable.find((s) => s.kind === 'bili' && !s.nearExpiry) ||
       playable.find((s) => s.kind === 'bili') ||
       null;
 
@@ -2695,6 +2722,7 @@
             fmtPopularity(s.room.online) + ' 人气值',
             s.expired ? '流地址已过期' : '站内直连 · ' + biliQualityLabel(s.room),
             !s.expired && leftMin ? '地址约 ' + leftMin + ' 分钟后刷新' : '',
+            !s.expired && s.nearExpiry ? '即将过期，建议改用腾讯官方源' : '',
           ]
             .filter(Boolean)
             .join(' · '),
@@ -2826,7 +2854,8 @@
             if (!r) return;
             s.room = r;
             s.name = (r.title || 'B站直播间').slice(0, 28);
-            s.sub = r.roomid + ' · ' + biliQualityLabel(r);
+            s.nearExpiry = streamNearExpiry(r);
+            s.sub = r.roomid + ' · ' + biliQualityLabel(r) + (s.nearExpiry ? ' · 即将过期' : '');
             s.expired = streamExpired(r);
             s.playable = !!r.stream && !s.expired;
             s.viewers = r.online || 0;
@@ -2907,9 +2936,11 @@
         p.opts.biliRoom = s.room;
         if (s.expired || !s.room.stream) {
           // 流地址过期（B 站签名约 60 分钟）→ 自动切到还活着的线路，
-          // 而不是给用户留一块黑屏
+          // 而不是给用户留一块黑屏。
+          // 备选优先级：健康腾讯源（永久有效）→ 未即将过期的 B 站线 → 即将过期的 B 站线。
           const alt =
             sources.find((x) => x.kind === 'tx' && x.healthy && x.playable) ||
+            sources.find((x) => x.kind === 'bili' && x.playable && !x.expired && !x.nearExpiry) ||
             sources.find((x) => x.kind === 'bili' && x.playable && !x.expired);
           if (alt && alt.id !== s.id) {
             p.showMsg('该路直播地址已过期，正在切换到 ' + alt.name);

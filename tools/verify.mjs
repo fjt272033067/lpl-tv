@@ -433,6 +433,57 @@ function check(name, pass, detail) {
     );
   }
   await expPage.close();
+
+  /* ---------------- 「即将过期」的 B 站线路必须降权 ----------------
+   * B 站签名地址 TTL 只有 60 分钟，且只存在于 CI 烘焙的 liverooms.json 里。
+   * 各镜像 CDN 刷新不同步 → 可能取到 50 分钟前那份 → 地址**还剩 10 分钟**：
+   * 它没过期（仍算可播），但选它等于给用户一个十分钟后就黑屏的播放器。
+   *
+   * 构造：主房间（7734200）设成 5 分钟后过期，其余房间设成 60 分钟后过期。
+   * 期望：① 菜单里那条线带「即将过期」标注；② 它不会被选为主线路。
+   */
+  const nearPage = await ctx.newPage();
+  let nearRoomTitle = '';
+  await nearPage.route(
+    (url) => url.hostname === '127.0.0.1' && url.pathname.endsWith('/data/liverooms.json'),
+    async (route) => {
+      const res = await route.fetch();
+      if (!res.ok()) return route.continue();
+      const j = await res.json();
+      const now = Math.floor(Date.now() / 1000);
+      (j.rooms || []).forEach((r) => {
+        if (!r.stream) return;
+        const isNear = String(r.roomid) === '7734200';
+        r.stream.expires = now + (isNear ? 300 : 3600);
+        if (isNear) nearRoomTitle = String(r.title || '');
+      });
+      await route.fulfill({
+        response: res,
+        body: JSON.stringify(j),
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+  );
+  await nearPage.goto(base + '/#/live', { waitUntil: 'domcontentloaded' });
+  await nearPage.waitForTimeout(12000);
+  const nearState = await nearPage.evaluate(() => {
+    const btn = document.querySelector('[data-ctl="source"]');
+    if (btn) btn.click();
+    const items = [...document.querySelectorAll('.menu[data-menu="source"] .menu-item')].map((i) => i.textContent.trim());
+    return {
+      items: items,
+      marked: items.filter((t) => /即将过期/.test(t)).length,
+      mainTxt: (document.querySelector('.player-top') || {}).textContent || '',
+    };
+  });
+  console.log('   即将过期: ' + JSON.stringify(nearState).slice(0, 460));
+  check('「即将过期」的 B 站线路在菜单里有明确标注', nearState.marked >= 1, nearState.marked + ' 条已标注');
+  check(
+    '「即将过期」的 B 站线路不会被选为主线路',
+    !!nearRoomTitle && nearState.mainTxt.indexOf(nearRoomTitle) === -1,
+    '主线路：' + nearState.mainTxt.slice(0, 40)
+  );
+  await nearPage.close();
   await page.screenshot({ path: path.join(SHOTS, '01-live.png'), fullPage: false });
 
   // 打开清晰度菜单截图（同样走 DOM 触发，避免 <video> 遮挡命中测试）
