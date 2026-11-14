@@ -11,7 +11,14 @@ const URL = process.argv[2] || 'https://4kf9kfxujfhg2.space.mcode.cn';
 // 这里给每次导航加一个时间戳绕开缓存。
 const pageUrl = (hash) => URL + '/?t=' + Date.now() + (hash || '');
 const results = [];
+// p 传 'skip' 表示「无法判定，不计失败」—— 用于外部状态不可达时的判据。
+// 跳过项仍计入总数（保持基线条数不变），但不参与 pass/fail 结算。
 const check = (n, p, d) => {
+  if (p === 'skip') {
+    results.push({ n, p: null, skip: true, d: d || '' });
+    console.log(`  SKIP  ${n}${d ? ' — ' + d : ''}`);
+    return;
+  }
   results.push({ n, p: !!p, d: d || '' });
   console.log(`  ${p ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`);
 };
@@ -58,30 +65,60 @@ console.log('\n[2] 直播页');
 // 再决定页面应该显示什么 —— 休赛期没有信号不算回归；真有信号却没显示才算。
 // 这里在 Node 侧独立取一份上游快照（与站点浏览器走的是不同的传输路径）。
 const UPSTREAM_LIVEROOMS = [
+  'https://gh-proxy.com/https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data/liverooms.json',
   'https://raw.githubusercontent.com/fjt272033067/lpl-tv/main/site/data/liverooms.json',
   'https://gcore.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data/liverooms.json',
   'https://cdn.jsdelivr.net/gh/fjt272033067/lpl-tv@main/site/data/liverooms.json',
 ];
-let upstream = null;
-for (const u of UPSTREAM_LIVEROOMS) {
-  try {
-    const r = await fetch(u, { signal: AbortSignal.timeout(9000) });
-    if (r.ok) {
-      upstream = await r.json();
-      break;
-    }
-  } catch (e) {
-    /* 换下一个镜像 */
-  }
-}
+// 并发取全部镜像，再按 updatedAt **择新** —— 与站点运行时的多镜像口径一致。
+//
+// ⚠️ 之前是「按顺序取，第一个能返回 200 的就用」。这是错的：各镜像的 CDN 缓存与
+// 刷新节奏不同步，可能给出一份**旧副本**（实测 gcore/cdn 给的是 20:19 的那份，
+// 而 gh-proxy/raw 已是 21:39）。拿到旧副本 → 其中的 B 站流地址已过期 →
+// 「上游有信号」的判定归零 → 把「镜像旧」误判成「上游无信号」→
+// 反过来要求页面显示「暂无直播信号」，而页面明明在播。
+const upstreamPicks = (
+  await Promise.all(
+    UPSTREAM_LIVEROOMS.map(async (u) => {
+      try {
+        const r = await fetch(u, { signal: AbortSignal.timeout(9000) });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch (e) {
+        return null; // 换下一个镜像
+      }
+    })
+  )
+).filter(Boolean);
+upstreamPicks.sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
+const upstream = upstreamPicks[0] || null;
+const upstreamUpdatedAt = upstream ? upstream.updatedAt || '' : '';
 const upstreamRooms = (upstream && (upstream.rooms || upstream)) || [];
 const nowS = Math.floor(Date.now() / 1000);
+// 「上游在播」与「流地址还有效」是**两件事**，不能混为一谈：
+//   · 房间 live=true        → 上游确实在播，站点据此显示「正在直播」是对的
+//   · stream.expires 未到    → B 站签名地址还有效，决定「能不能播出来」
+// 混为一谈，就会出现「旧镜像 → 地址过期 → 误判上游无信号」。
+const upstreamOnAir = upstreamRooms.filter((r) => r && r.live).length;
 const upstreamLive = upstreamRooms.filter(
   (r) => r && r.live && r.stream && r.stream.url && (!r.stream.expires || r.stream.expires > nowS)
-);
+).length;
 console.log(
-  '   上游直播信号: ' + upstreamLive.length + ' 条 / 共 ' + upstreamRooms.length + ' 个房间（上游可达=' + (upstream ? '是' : '否') + '）'
+  '   上游直播信号: 在播 ' +
+    upstreamOnAir +
+    ' 个房间 / 其中流地址仍有效 ' +
+    upstreamLive +
+    ' 个（共 ' +
+    upstreamRooms.length +
+    ' 个房间；镜像可达 ' +
+    upstreamPicks.length +
+    '/' +
+    UPSTREAM_LIVEROOMS.length +
+    '；采用 updatedAt=' +
+    (upstreamUpdatedAt || '（无）') +
+    '）'
 );
+const upstreamReachable = !!upstream;
 await page.goto(pageUrl('#/live'), { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(16000);
 const live = await page.evaluate(() => {
@@ -142,7 +179,13 @@ if (live.w > 0 && live.rs >= 2) {
 // 清晰度档位随线路变化（腾讯多档 / B 站单档），判据是「有可用档位」。
 // ⚠️ 必须按「上游有没有信号」来判：上游在播却显示不出来才算回归；
 // 上游本来就没信号时不该拿这个判据去卡站点（休赛期不算回归）。
-if (upstreamLive.length === 0) {
+if (!upstreamReachable) {
+  // 上游一个镜像都取不到 → **无法判定**是否在播，不该判失败
+  console.log('   （上游镜像全部不可达 → 「上游是否在播」无法判定，相关判据跳过）');
+  check('无上游信号时站点不假装有直播', 'skip', '上游镜像全部不可达，无法判定');
+  check('清晰度有可用档位', 'skip', '上游不可达');
+  check('直播赛事信息已展示', 'skip', '上游不可达');
+} else if (upstreamOnAir === 0) {
   console.log('   （上游当前无直播信号 → 清晰度/侧栏判据按信号感知跳过，但要给出明确提示）');
   check('无上游信号时站点不假装有直播', /暂无直播信号|信号|结束|准备/.test(liveMsg), liveMsg || '（无提示）');
 } else if (live.q >= 1 && live.rows >= 3) {
@@ -312,7 +355,10 @@ check('平台标签有区分色', visual.platKinds.length >= 2, visual.platKinds
 check('赛事横幅已渲染', visual.banner, visual.bannerLogos + ' 个队徽');
 check('有回到顶部按钮', visual.toTop);
 // 通知条：上游有信号时必须有内容；上游没信号时必须如实写「暂无直播信号」
-if (upstreamLive.length > 0) {
+if (!upstreamReachable) {
+  check('通知条为单行紧凑信息', 'skip', '上游镜像全部不可达，无法判定');
+  check('通知条如实反映无信号', 'skip', '上游镜像全部不可达，无法判定');
+} else if (upstreamOnAir > 0) {
   check(
     '通知条为单行紧凑信息',
     visual.stripItems > 0 || !!channel.banner,
@@ -918,6 +964,11 @@ await fp.close();
 
 await browser.close();
 const pass = results.filter((r) => r.p).length;
-console.log(`\n===== 线上验收：${pass}/${results.length} 通过 =====`);
-results.forEach((r) => { if (!r.p) console.log(`  ✗ ${r.n} ${r.d}`); });
-process.exit(pass === results.length ? 0 : 1);
+const fail = results.filter((r) => r.p === false).length;
+const skip = results.filter((r) => r.skip).length;
+console.log(
+  `\n===== 线上验收：${pass}/${results.length} 通过` + (skip ? `（${skip} 条跳过）` : '') + ' ====='
+);
+results.forEach((r) => { if (r.p === false) console.log(`  ✗ ${r.n} ${r.d}`); });
+// 只有真失败才算不通过；跳过项（外部状态不可达、无法判定）不算失败。
+process.exit(fail === 0 ? 0 : 1);
