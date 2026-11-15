@@ -1,8 +1,8 @@
 {
- "updatedAt": "2026-11-14T23:20:22.243Z",
+ "updatedAt": "2026-11-15T00:20:47.707Z",
  "source": {
   "schedule": "site/data/schedule.json",
-  "scheduleUpdatedAt": "2026-11-14T23:19:51.890Z",
+  "scheduleUpdatedAt": "2026-11-15T00:20:18.205Z",
   "danmakuFiles": 201
  },
  "match": {
@@ -15,7 +15,7 @@
   "place": "美国 纽约市布鲁克林",
   "teamA": "GEN",
   "teamB": "BLG",
-  "score": "1:2"
+  "score": "1:3"
  },
  "teams": {
   "GEN": {
@@ -111,7 +111,7 @@
    {
     "date": "2026-11-15 03:00:00",
     "event": "2026全球总决赛",
-    "score": "1:2",
+    "score": "1:3",
     "a": "GEN",
     "b": "BLG"
    }
