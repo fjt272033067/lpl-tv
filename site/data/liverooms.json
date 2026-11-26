@@ -1,5 +1,5 @@
 {
- "updatedAt": "2026-11-26T19:23:52.368Z",
+ "updatedAt": "2026-11-26T19:43:49.330Z",
  "currentMatch": "",
  "rooms": [
   {
@@ -7,15 +7,15 @@
    "uid": 50329118,
    "title": "恭喜BLG获得2026英雄联盟全球总决赛冠军",
    "live": true,
-   "online": 161658,
-   "attention": 18175314,
+   "online": 159943,
+   "attention": 18175281,
    "uname": "",
    "area": "游戏赛事",
    "cover": "data/cover/7734200.jpg",
    "stream": {
-    "url": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/378162/live_7734200_bs_1348183_1500.m3u8?expires=1795724629&len=0&oi=77317471&pt=web&qn=150&trid=100078dfb719440d5da3693d00d93c6b0887&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=4ba3d428864acc28c0ce28875ba65372&site=3232edd3c13164b4ef6d933da654e1ff&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&cid=7734200&score=100&origin_bitrate=568&info_source=hot_cache&p2p_type=-1&sl=10&hot_cdn=852364&media_type=0&hdr_type=0&pp=&codec=0&deploy_env=prod&suffix=1500&sk=e1f4ebebe465a2c143c02b0228f25a8b&source=puv3_onetier&vd=bc&src=puv3&order=1",
-    "flvUrl": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/378162/live_7734200_bs_1348183_1500.flv?expires=1795724629&len=0&oi=77317471&pt=web&qn=150&trid=100078dfb719440d5da3693d00d93c6b0887&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=4ba3d428864acc28c0ce28875ba65372&site=3232edd3c13164b4ef6d933da654e1ff&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&cid=7734200&score=100&origin_bitrate=568&info_source=hot_cache&p2p_type=-1&sl=10&hot_cdn=852364&media_type=0&hdr_type=0&pp=&codec=0&deploy_env=prod&suffix=1500&sk=e1f4ebebe465a2c143c02b0228f25a8b&source=puv3_onetier&vd=bc&src=puv3&order=1",
-    "expires": 1795724629,
+    "url": "https://d1--ov-gotcha07.bilivideo.com/live-bvc/784054/live_7734200_bs_1348183_1500.m3u8?expires=1795725826&len=0&oi=338759092&pt=web&qn=150&trid=100042948cf71dc6ddbf7701b8a6d76b088b&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha07&sign=ab9ac26598736da8e13c646af87ea51c&site=b4b77ca2bcdc849edab1968a716df521&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&cid=7734200&pp=&media_type=0&score=100&deploy_env=prod&source=puv3_onetier&sl=10&suffix=1500&codec=0&p2p_type=-1&origin_bitrate=695&hdr_type=0&info_source=hot_cache&sk=e1f4ebebe465a2c143c02b0228f25a8b&hot_cdn=852364&vd=bc&src=puv3&order=1",
+    "flvUrl": "https://d1--ov-gotcha07.bilivideo.com/live-bvc/784054/live_7734200_bs_1348183_1500.flv?expires=1795725826&len=0&oi=338759092&pt=web&qn=150&trid=100042948cf71dc6ddbf7701b8a6d76b088b&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha07&sign=ab9ac26598736da8e13c646af87ea51c&site=b4b77ca2bcdc849edab1968a716df521&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&cid=7734200&pp=&media_type=0&score=100&deploy_env=prod&source=puv3_onetier&sl=10&suffix=1500&codec=0&p2p_type=-1&origin_bitrate=695&hdr_type=0&info_source=hot_cache&sk=e1f4ebebe465a2c143c02b0228f25a8b&hot_cdn=852364&vd=bc&src=puv3&order=1",
+    "expires": 1795725826,
     "qn": 150,
     "qnName": "高清",
     "type": "hls"
@@ -27,15 +27,15 @@
    "uid": 178778949,
    "title": "自然之力全球总决赛Day3",
    "live": true,
-   "online": 2298,
-   "attention": 3111434,
+   "online": 2294,
+   "attention": 3111439,
    "uname": "",
    "area": "英雄联盟",
    "cover": "",
    "stream": {
-    "url": "https://d1--ov-gotcha07.bilivideo.com/live-bvc/242925/live_2yfupx_Sfqut1P_38qji_2500.m3u8?expires=1795724631&len=0&oi=77317471&pt=web&qn=250&trid=1000449dd82526b9b1630863adeb4f6b0887&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha07&sign=51ecd4dfb5cb781824bc2309571e72b6&site=c735e4cd4fcdd12df664895675340817&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&source=puv3_onetier&hot_cdn=852356&media_type=0&deploy_env=prod&sk=b99362092a03c2337a740868f967e3a0&codec=0&cid=5472071&sl=1&info_source=origin&pp=&score=1&p2p_type=-1&hdr_type=0&origin_bitrate=1138&suffix=2500&vd=bc&src=puv3&order=1",
-    "flvUrl": "https://d1--ov-gotcha07.bilivideo.com/live-bvc/242925/live_2yfupx_Sfqut1P_38qji_2500.flv?expires=1795724631&len=0&oi=77317471&pt=web&qn=250&trid=1000449dd82526b9b1630863adeb4f6b0887&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha07&sign=51ecd4dfb5cb781824bc2309571e72b6&site=c735e4cd4fcdd12df664895675340817&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&source=puv3_onetier&hot_cdn=852356&media_type=0&deploy_env=prod&sk=b99362092a03c2337a740868f967e3a0&codec=0&cid=5472071&sl=1&info_source=origin&pp=&score=1&p2p_type=-1&hdr_type=0&origin_bitrate=1138&suffix=2500&vd=bc&src=puv3&order=1",
-    "expires": 1795724631,
+    "url": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/335454/live_2yfupx_Sfqut1P_38qji_2500.m3u8?expires=1795725828&len=0&oi=338759092&pt=web&qn=250&trid=10002e30430b52a1e0fc4436bb96bd6b088b&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=2526f585620217c4e27a736b154cd5d5&site=13df9bbbb6699b1cf3bd1729e96cfa50&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&score=1&sl=1&sk=b99362092a03c2337a740868f967e3a0&media_type=0&info_source=origin&origin_bitrate=1026&hot_cdn=852356&pp=&codec=0&hdr_type=0&cid=5472071&source=puv3_onetier&p2p_type=-1&suffix=2500&deploy_env=prod&vd=bc&src=puv3&order=1",
+    "flvUrl": "https://d1--ov-gotcha05.bilivideo.com/live-bvc/335454/live_2yfupx_Sfqut1P_38qji_2500.flv?expires=1795725828&len=0&oi=338759092&pt=web&qn=250&trid=10002e30430b52a1e0fc4436bb96bd6b088b&bmt=2&sigparams=cdn,expires,len,oi,pt,qn,trid,bmt&cdn=ov-gotcha05&sign=2526f585620217c4e27a736b154cd5d5&site=13df9bbbb6699b1cf3bd1729e96cfa50&free_type=0&mid=0&sche=ban&trace=0&isp=other&rg=other&pv=other&score=1&sl=1&sk=b99362092a03c2337a740868f967e3a0&media_type=0&info_source=origin&origin_bitrate=1026&hot_cdn=852356&pp=&codec=0&hdr_type=0&cid=5472071&source=puv3_onetier&p2p_type=-1&suffix=2500&deploy_env=prod&vd=bc&src=puv3&order=1",
+    "expires": 1795725828,
     "qn": 250,
     "qnName": "超清",
     "type": "hls"
@@ -61,7 +61,7 @@
    "title": "WS现在不是很虚弱",
    "live": false,
    "online": 0,
-   "attention": 105601,
+   "attention": 105600,
    "uname": "",
    "area": "英雄联盟",
    "cover": "",
